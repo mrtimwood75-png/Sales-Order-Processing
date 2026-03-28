@@ -32,7 +32,29 @@ STRIPE_SUCCESS_URL = os.getenv("STRIPE_SUCCESS_URL", "https://example.com/succes
 STRIPE_CANCEL_URL = os.getenv("STRIPE_CANCEL_URL", "https://example.com/cancel").strip()
 STRIPE_CURRENCY = os.getenv("STRIPE_CURRENCY", "aud").strip().lower()
 
-LOGO_PATH = Path(os.getenv("BOCONCEPT_LOGO_PATH", str(BASE_DIR / "assets" / "boconcept_logo.png")))
+
+def resolve_logo_path():
+    candidates = [
+        BASE_DIR / "assets" / "boconcept_logo.png",
+        BASE_DIR / "assets" / "boconcept_logo.PNG",
+        BASE_DIR / "assets" / "BoConcept_logo.png",
+        BASE_DIR / "assets" / "BoConcept_logo.PNG",
+    ]
+
+    env_path = os.getenv("BOCONCEPT_LOGO_PATH", "").strip()
+    if env_path:
+        p = Path(env_path)
+        if p.exists():
+            return p
+
+    for p in candidates:
+        if p.exists():
+            return p
+
+    return None
+
+
+LOGO_PATH = resolve_logo_path()
 
 
 def ensure_storage():
@@ -520,7 +542,6 @@ def add_logo_and_optional_payment_button(source_pdf_path, output_pdf_path, logo_
 
     source_pdf_path = Path(source_pdf_path)
     output_pdf_path = Path(output_pdf_path)
-    logo_path = Path(logo_path) if logo_path else None
 
     if not source_pdf_path.exists():
         raise RuntimeError(f"Source PDF not found: {source_pdf_path}")
@@ -530,7 +551,7 @@ def add_logo_and_optional_payment_button(source_pdf_path, output_pdf_path, logo_
     for page in doc:
         page_width = page.rect.width
 
-        if logo_path and logo_path.exists():
+        if logo_path and Path(logo_path).exists():
             logo_rect = fitz.Rect(24, 18, 150, 60)
             page.insert_image(
                 logo_rect,
@@ -645,6 +666,11 @@ init_db()
 
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 st.title(APP_TITLE)
+
+if LOGO_PATH:
+    st.caption(f"Logo loaded: {LOGO_PATH}")
+else:
+    st.error("BoConcept logo not found in assets folder")
 
 st.caption(f"Destination: {DATA_DIR}")
 st.caption(f"Incoming: {INCOMING_DIR}")
