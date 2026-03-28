@@ -20,21 +20,7 @@ except Exception:
 
 APP_TITLE = "BoConcept Ops App"
 
-# ============================================================
-# SET YOUR SHAREPOINT-SYNCED FOLDER HERE
-# ============================================================
-SHAREPOINT_ROOT = Path(r"C:\Users\YourName\OneDrive - Your Company\BoConcept Orders")
-
-DATA_DIR = SHAREPOINT_ROOT
-INCOMING_DIR = DATA_DIR / "incoming"
-STAMPED_DIR = DATA_DIR / "stamped"
-ATTACHMENTS_DIR = DATA_DIR / "attachments"
-DB_PATH = DATA_DIR / "ops_app.db"
-
-DATA_DIR.mkdir(parents=True, exist_ok=True)
-INCOMING_DIR.mkdir(parents=True, exist_ok=True)
-STAMPED_DIR.mkdir(parents=True, exist_ok=True)
-ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)
+DEFAULT_DESTINATION = r"C:\Users\YourName\OneDrive - Your Company\BoConcept Orders"
 
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "").strip()
 STRIPE_SUCCESS_URL = os.getenv("STRIPE_SUCCESS_URL", "https://example.com/success").strip()
@@ -45,8 +31,30 @@ BASE_DIR = Path(__file__).resolve().parent
 LOGO_PATH = Path(os.getenv("BOCONCEPT_LOGO_PATH", str(BASE_DIR / "assets" / "boconcept_logo.png")))
 
 
+def get_storage_paths():
+    root_str = st.session_state.get("destination_folder", DEFAULT_DESTINATION)
+    root = Path(root_str)
+    return {
+        "root": root,
+        "incoming": root / "incoming",
+        "stamped": root / "stamped",
+        "attachments": root / "attachments",
+        "db": root / "ops_app.db",
+    }
+
+
+def ensure_storage():
+    paths = get_storage_paths()
+    paths["root"].mkdir(parents=True, exist_ok=True)
+    paths["incoming"].mkdir(parents=True, exist_ok=True)
+    paths["stamped"].mkdir(parents=True, exist_ok=True)
+    paths["attachments"].mkdir(parents=True, exist_ok=True)
+    return paths
+
+
 def get_conn():
-    conn = sqlite3.connect(DB_PATH)
+    paths = ensure_storage()
+    conn = sqlite3.connect(paths["db"])
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -628,9 +636,35 @@ def build_bundle_pdf(source_pdf_path, output_pdf_path, logo_path, attachments, b
     return output_pdf_path
 
 
-init_db()
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 st.title(APP_TITLE)
+
+st.markdown("### Destination Folder")
+dest_col1, dest_col2 = st.columns([5, 1])
+
+destination_input = dest_col1.text_input(
+    "SharePoint / destination folder path",
+    value=st.session_state.get("destination_folder", DEFAULT_DESTINATION),
+)
+
+if dest_col2.button("Set Destination Folder"):
+    try:
+        test_path = Path(destination_input)
+        test_path.mkdir(parents=True, exist_ok=True)
+        st.session_state["destination_folder"] = str(test_path)
+        init_db()
+        st.success(f"Destination set to: {test_path}")
+        st.rerun()
+    except Exception as e:
+        st.error(f"Invalid destination folder: {e}")
+
+current_paths = ensure_storage()
+init_db()
+
+st.caption(f"Current destination: {current_paths['root']}")
+st.caption(f"Incoming: {current_paths['incoming']}")
+st.caption(f"Stamped: {current_paths['stamped']}")
+st.caption(f"Attachments: {current_paths['attachments']}")
 
 tab1, tab2, tab3, tab4 = st.tabs(
     ["Pending Orders", "Pending Quotes", "Ready SMS", "History"]
@@ -641,7 +675,7 @@ with tab1:
 
     uploaded_pdf = st.file_uploader("Upload sales order PDF", type=["pdf"], key="orders_pdf")
     if uploaded_pdf is not None:
-        save_path = INCOMING_DIR / uploaded_pdf.name
+        save_path = current_paths["incoming"] / uploaded_pdf.name
         with open(save_path, "wb") as f:
             f.write(uploaded_pdf.getbuffer())
 
@@ -682,24 +716,9 @@ with tab1:
             sales_order = st.text_input("Sales order", value=current.get("sales_order") or "")
             order_date = st.text_input("Order date", value=current.get("order_date") or "")
 
-            total_amount = st.number_input(
-                "Total amount",
-                min_value=0.0,
-                value=float(current.get("total_amount") or 0),
-                step=0.01,
-            )
-            prepayment = st.number_input(
-                "Prepayment",
-                min_value=0.0,
-                value=float(current.get("prepayment") or 0),
-                step=0.01,
-            )
-            balance_due = st.number_input(
-                "Balance due",
-                min_value=0.0,
-                value=float(current.get("balance_due") or 0),
-                step=0.01,
-            )
+            total_amount = st.number_input("Total amount", min_value=0.0, value=float(current.get("total_amount") or 0), step=0.01)
+            prepayment = st.number_input("Prepayment", min_value=0.0, value=float(current.get("prepayment") or 0), step=0.01)
+            balance_due = st.number_input("Balance due", min_value=0.0, value=float(current.get("balance_due") or 0), step=0.01)
 
             payment_choice = st.radio(
                 "Payment link type",
@@ -712,9 +731,9 @@ with tab1:
             payment_calc = payment_choice_to_values(payment_choice, balance_due)
             st.info(f"{payment_calc['payment_label']} — Amount: {format_money(payment_calc['payment_amount'])}")
 
-            payment_link = st.text_input("Payment link", value=current.get("payment_link") or "", disabled=True)
-            stripe_session_id = st.text_input("Stripe session ID", value=current.get("stripe_session_id") or "", disabled=True)
-            stamped_pdf_path = st.text_input("Bundle PDF", value=current.get("stamped_pdf_path") or "", disabled=True)
+            st.text_input("Payment link", value=current.get("payment_link") or "", disabled=True)
+            st.text_input("Stripe session ID", value=current.get("stripe_session_id") or "", disabled=True)
+            st.text_input("Bundle PDF", value=current.get("stamped_pdf_path") or "", disabled=True)
             status = st.text_input("Status", value=current.get("status") or "")
 
             col_save, col_link, col_submit = st.columns(3)
@@ -815,7 +834,7 @@ with tab1:
 
         if col_att_a.button("Add Files to Bundle", key=f"add_files_btn_{selected_file}"):
             if extra_files:
-                order_attach_dir = ATTACHMENTS_DIR / Path(selected_file).stem
+                order_attach_dir = current_paths["attachments"] / Path(selected_file).stem
                 order_attach_dir.mkdir(parents=True, exist_ok=True)
 
                 saved_count = 0
@@ -844,7 +863,7 @@ with tab1:
                 refreshed = get_order_by_source_file(selected_file)
                 safe_order = re.sub(r"[^A-Za-z0-9_-]+", "_", refreshed.get("sales_order") or Path(selected_file).stem)
                 bundle_name = f"{safe_order}_bundle.pdf"
-                bundle_path = STAMPED_DIR / bundle_name
+                bundle_path = current_paths["stamped"] / bundle_name
 
                 button_label = None
                 button_url = None
@@ -867,7 +886,7 @@ with tab1:
                     status="Bundle PDF Created",
                 )
 
-                st.success(f"Bundle PDF created: {built_path.name}")
+                st.success(f"Bundle PDF created: {built_path}")
                 st.rerun()
             except Exception as e:
                 st.error(f"Bundle build failed: {e}")
@@ -909,7 +928,7 @@ with tab2:
 
     uploaded_quote = st.file_uploader("Upload quote PDF", type=["pdf"], key="quotes_pdf")
     if uploaded_quote is not None:
-        save_path = INCOMING_DIR / uploaded_quote.name
+        save_path = current_paths["incoming"] / uploaded_quote.name
         with open(save_path, "wb") as f:
             f.write(uploaded_quote.getbuffer())
 
@@ -933,7 +952,7 @@ with tab3:
 
     uploaded_excel = st.file_uploader("Upload ready-for-delivery Excel", type=["xlsx", "xls"], key="sms_excel")
     if uploaded_excel is not None:
-        excel_path = DATA_DIR / uploaded_excel.name
+        excel_path = current_paths["root"] / uploaded_excel.name
         with open(excel_path, "wb") as f:
             f.write(uploaded_excel.getbuffer())
 
