@@ -2,6 +2,7 @@ import re
 import sqlite3
 from pathlib import Path
 from datetime import datetime
+import os
 
 import pandas as pd
 import streamlit as st
@@ -11,16 +12,32 @@ try:
 except Exception:
     fitz = None
 
+try:
+    import stripe
+except Exception:
+    stripe = None
+
 
 APP_TITLE = "BoConcept Ops App"
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 INCOMING_DIR = DATA_DIR / "incoming"
+STAMPED_DIR = DATA_DIR / "stamped"
 DB_PATH = DATA_DIR / "ops_app.db"
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 INCOMING_DIR.mkdir(parents=True, exist_ok=True)
+STAMPED_DIR.mkdir(parents=True, exist_ok=True)
+
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "").strip()
+STRIPE_SUCCESS_URL = os.getenv("STRIPE_SUCCESS_URL", "https://example.com/success").strip()
+STRIPE_CANCEL_URL = os.getenv("STRIPE_CANCEL_URL", "https://example.com/cancel").strip()
+STRIPE_CURRENCY = os.getenv("STRIPE_CURRENCY", "aud").strip().lower()
+
+# Put your BoConcept logo file here, or override with env var.
+# Recommended: ./assets/boconcept_logo.png
+LOGO_PATH = Path(os.getenv("BOCONCEPT_LOGO_PATH", str(BASE_DIR / "assets" / "boconcept_logo.png")))
 
 
 def get_conn():
@@ -36,6 +53,7 @@ def init_db():
             CREATE TABLE IF NOT EXISTS orders (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 source_file TEXT UNIQUE,
+                stamped_pdf_path TEXT,
                 customer_name TEXT,
                 customer_email TEXT,
                 phone TEXT,
@@ -44,7 +62,11 @@ def init_db():
                 total_amount REAL,
                 prepayment REAL,
                 balance_due REAL,
+                payment_mode TEXT,
+                payment_amount REAL,
+                payment_label TEXT,
                 payment_link TEXT,
+                stripe_session_id TEXT,
                 envelope_id TEXT,
                 status TEXT DEFAULT 'Ready',
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -52,6 +74,24 @@ def init_db():
             )
             """
         )
+
+        existing_cols = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(orders)").fetchall()
+        }
+
+        required_additions = {
+            "stamped_pdf_path": "TEXT",
+            "payment_mode": "TEXT",
+            "payment_amount": "REAL",
+            "payment_label": "TEXT",
+            "stripe_session_id": "TEXT",
+        }
+
+        for col, col_type in required_additions.items():
+            if col not in existing_cols:
+                conn.execute(f"ALTER TABLE orders ADD COLUMN {col} {col_type}")
+
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS sms_jobs (
@@ -74,6 +114,7 @@ def init_db():
 def upsert_order(order: dict):
     cols = [
         "source_file",
+        "stamped_pdf_path",
         "customer_name",
         "customer_email",
         "phone",
@@ -82,7 +123,11 @@ def upsert_order(order: dict):
         "total_amount",
         "prepayment",
         "balance_due",
+        "payment_mode",
+        "payment_amount",
+        "payment_label",
         "payment_link",
+        "stripe_session_id",
         "envelope_id",
         "status",
     ]
@@ -105,6 +150,12 @@ def get_orders():
     with get_conn() as conn:
         rows = conn.execute("SELECT * FROM orders ORDER BY updated_at DESC, id DESC").fetchall()
         return [dict(r) for r in rows]
+
+
+def get_order_by_source_file(source_file: str):
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM orders WHERE source_file = ?", (source_file,)).fetchone()
+        return dict(row) if row else None
 
 
 def update_order(source_file: str, **fields):
@@ -173,9 +224,9 @@ def parse_money(text):
     if not text:
         return None
 
-    # Danish number handling:
+    # Danish format:
     # 71.245,00 -> 71245.00
-    # 6.374,99  -> 6374.99
+    # 6.374,99 -> 6374.99
     if "," in text:
         text = text.replace(".", "")
         text = text.replace(",", ".")
@@ -187,6 +238,12 @@ def parse_money(text):
         return float(text)
     except ValueError:
         return None
+
+
+def format_money(value):
+    if value is None:
+        return "-"
+    return f"{value:,.2f}"
 
 
 def find_value(pattern, text, group=1):
@@ -244,6 +301,7 @@ def extract_totals_block(text):
 def parse_sales_order_pdf(pdf_path: Path):
     default_result = {
         "source_file": str(pdf_path),
+        "stamped_pdf_path": "",
         "customer_name": "",
         "customer_email": "",
         "phone": "",
@@ -252,7 +310,11 @@ def parse_sales_order_pdf(pdf_path: Path):
         "total_amount": None,
         "prepayment": None,
         "balance_due": None,
+        "payment_mode": "balance",
+        "payment_amount": None,
+        "payment_label": "Pay Balance Now",
         "payment_link": "",
+        "stripe_session_id": "",
         "envelope_id": "",
         "status": "Ready",
     }
@@ -288,8 +350,11 @@ def parse_sales_order_pdf(pdf_path: Path):
     if balance_due is None and total_amount is not None and prepayment is not None:
         balance_due = total_amount - prepayment
 
+    default_payment_amount = balance_due if balance_due is not None else 0.0
+
     return {
         "source_file": str(pdf_path),
+        "stamped_pdf_path": "",
         "customer_name": customer_name,
         "customer_email": find_value(r"(?:E-?mail|Email)\s*:?\s*([^\s]+@[^\s]+)", text),
         "phone": find_value(r"(?:Mobile phone|Mobile|Phone|Telephone)\s*:?\s*([+\d][\d\s]+)", text),
@@ -298,16 +363,14 @@ def parse_sales_order_pdf(pdf_path: Path):
         "total_amount": total_amount,
         "prepayment": prepayment,
         "balance_due": balance_due,
+        "payment_mode": "balance",
+        "payment_amount": default_payment_amount,
+        "payment_label": "Pay Balance Now",
         "payment_link": "",
+        "stripe_session_id": "",
         "envelope_id": "",
         "status": "Ready",
     }
-
-
-def create_fake_payment_link(order_no, amount):
-    safe_order = order_no or "order"
-    amount = float(amount or 0)
-    return f"https://pay.example.com/{safe_order}?amount={amount:.2f}"
 
 
 def create_fake_envelope_id():
@@ -316,6 +379,134 @@ def create_fake_envelope_id():
 
 def create_fake_sms_id():
     return f"SMS-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+
+
+def ensure_stripe_ready():
+    if stripe is None:
+        raise RuntimeError("Stripe package not installed. Add 'stripe' to requirements.txt")
+    if not STRIPE_SECRET_KEY:
+        raise RuntimeError("Missing STRIPE_SECRET_KEY environment variable")
+    stripe.api_key = STRIPE_SECRET_KEY
+
+
+def payment_choice_to_values(choice: str, balance_due: float):
+    bal = float(balance_due or 0)
+    if bal <= 0:
+        raise RuntimeError("Balance due must be greater than 0")
+
+    if choice == "deposit":
+        return {
+            "payment_mode": "deposit",
+            "payment_amount": round(bal * 0.50, 2),
+            "payment_label": "Pay 50% Deposit Now",
+        }
+
+    return {
+        "payment_mode": "balance",
+        "payment_amount": round(bal, 2),
+        "payment_label": "Pay Balance Now",
+    }
+
+
+def create_stripe_checkout_link(customer_name, customer_email, sales_order, amount, payment_label):
+    ensure_stripe_ready()
+
+    amount_value = float(amount or 0)
+    if amount_value <= 0:
+        raise RuntimeError("Payment amount must be greater than 0")
+
+    unit_amount = int(round(amount_value * 100))
+    order_ref = sales_order or "Order"
+
+    session = stripe.checkout.Session.create(
+        mode="payment",
+        success_url=STRIPE_SUCCESS_URL,
+        cancel_url=STRIPE_CANCEL_URL,
+        customer_email=customer_email or None,
+        client_reference_id=order_ref,
+        payment_method_types=["card"],
+        line_items=[
+            {
+                "quantity": 1,
+                "price_data": {
+                    "currency": STRIPE_CURRENCY,
+                    "unit_amount": unit_amount,
+                    "product_data": {
+                        "name": payment_label,
+                        "description": f"BoConcept order {order_ref}",
+                    },
+                },
+            }
+        ],
+        metadata={
+            "sales_order": order_ref,
+            "customer_name": customer_name or "",
+            "customer_email": customer_email or "",
+            "payment_label": payment_label,
+            "payment_amount": f"{amount_value:.2f}",
+        },
+    )
+
+    return {
+        "url": session.url,
+        "session_id": session.id,
+    }
+
+
+def add_logo_and_payment_button_to_pdf(source_pdf_path, output_pdf_path, logo_path, button_label, button_url):
+    if fitz is None:
+        raise RuntimeError("PyMuPDF not installed. Add 'pymupdf' to requirements.txt")
+
+    source_pdf_path = Path(source_pdf_path)
+    output_pdf_path = Path(output_pdf_path)
+    logo_path = Path(logo_path) if logo_path else None
+
+    if not source_pdf_path.exists():
+        raise RuntimeError("Source PDF not found")
+
+    doc = fitz.open(source_pdf_path)
+
+    for page in doc:
+        page_width = page.rect.width
+        page_height = page.rect.height
+
+        # Logo top-left on every page
+        if logo_path and logo_path.exists():
+            logo_rect = fitz.Rect(24, 18, 144, 58)
+            page.insert_image(logo_rect, filename=str(logo_path), keep_proportion=True, overlay=True)
+
+        # Button top-right on every page
+        button_width = 160
+        button_height = 28
+        x1 = page_width - 24 - button_width
+        y1 = 20
+        button_rect = fitz.Rect(x1, y1, x1 + button_width, y1 + button_height)
+
+        shape = page.new_shape()
+        shape.draw_rect(button_rect)
+        shape.finish(color=(0.0, 0.0, 0.0), fill=(0.0, 0.0, 0.0), width=1)
+        shape.commit()
+
+        page.insert_textbox(
+            button_rect,
+            button_label,
+            fontsize=10,
+            fontname="helv",
+            color=(1, 1, 1),
+            align=1,
+            overlay=True,
+        )
+
+        page.insert_link(
+            {
+                "kind": fitz.LINK_URI,
+                "from": button_rect,
+                "uri": button_url,
+            }
+        )
+
+    doc.save(output_pdf_path, garbage=4, deflate=True)
+    doc.close()
 
 
 init_db()
@@ -337,31 +528,35 @@ with tab1:
 
         order = parse_sales_order_pdf(save_path)
         upsert_order(order)
+        st.session_state["selected_order_file"] = str(save_path)
         st.success(f"Loaded {uploaded_pdf.name}")
 
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Total", f"{order['total_amount']:,.2f}" if order["total_amount"] is not None else "-")
-        col2.metric("Prepayment", f"{order['prepayment']:,.2f}" if order["prepayment"] is not None else "-")
-        col3.metric("Balance due", f"{order['balance_due']:,.2f}" if order["balance_due"] is not None else "-")
-
     orders = get_orders()
-    if orders:
-        df = pd.DataFrame(orders)
-        display_cols = [
-            "source_file",
-            "customer_name",
-            "customer_email",
-            "sales_order",
-            "total_amount",
-            "prepayment",
-            "balance_due",
-            "status",
-        ]
-        display_cols = [c for c in display_cols if c in df.columns]
-        st.dataframe(df[display_cols], use_container_width=True)
 
-        selected_file = st.selectbox("Select order", df["source_file"].tolist(), key="select_order")
-        current = next(x for x in orders if x["source_file"] == selected_file)
+    if orders:
+        order_options = [o["source_file"] for o in orders]
+
+        if "selected_order_file" not in st.session_state or st.session_state["selected_order_file"] not in order_options:
+            st.session_state["selected_order_file"] = order_options[0]
+
+        selected_file = st.selectbox(
+            "Select order",
+            order_options,
+            key="selected_order_file",
+        )
+
+        current = get_order_by_source_file(selected_file)
+
+        st.markdown("### Current Order")
+        st.caption(Path(selected_file).name)
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Total", format_money(current.get("total_amount")))
+        col2.metric("Prepayment", format_money(current.get("prepayment")))
+        col3.metric("Balance due", format_money(current.get("balance_due")))
+
+        current_mode = current.get("payment_mode") or "balance"
+        payment_index = 0 if current_mode == "balance" else 1
 
         with st.form("order_form"):
             customer_name = st.text_input("Customer name", value=current.get("customer_name") or "")
@@ -369,6 +564,7 @@ with tab1:
             phone = st.text_input("Phone", value=current.get("phone") or "")
             sales_order = st.text_input("Sales order", value=current.get("sales_order") or "")
             order_date = st.text_input("Order date", value=current.get("order_date") or "")
+
             total_amount = st.number_input(
                 "Total amount",
                 min_value=0.0,
@@ -387,16 +583,29 @@ with tab1:
                 value=float(current.get("balance_due") or 0),
                 step=0.01,
             )
-            generate_link = st.checkbox("Generate payment link")
-            submitted = st.form_submit_button("Save / Submit")
 
-        if submitted:
-            payment_link = current.get("payment_link") or ""
-            if generate_link and not payment_link:
-                payment_link = create_fake_payment_link(sales_order, balance_due)
+            payment_choice = st.radio(
+                "Payment link type",
+                options=["balance", "deposit"],
+                index=payment_index,
+                format_func=lambda x: "Balance" if x == "balance" else "Deposit (50% of balance)",
+                horizontal=True,
+            )
 
-            envelope_id = create_fake_envelope_id()
+            payment_calc = payment_choice_to_values(payment_choice, balance_due)
+            st.info(f"{payment_calc['payment_label']} — Amount: {format_money(payment_calc['payment_amount'])}")
 
+            payment_link = st.text_input("Payment link", value=current.get("payment_link") or "", disabled=True)
+            stripe_session_id = st.text_input("Stripe session ID", value=current.get("stripe_session_id") or "", disabled=True)
+            stamped_pdf_path = st.text_input("Stamped PDF", value=current.get("stamped_pdf_path") or "", disabled=True)
+            status = st.text_input("Status", value=current.get("status") or "")
+
+            col_save, col_link, col_submit = st.columns(3)
+            save_clicked = col_save.form_submit_button("Save Changes")
+            create_link_clicked = col_link.form_submit_button("Create Stripe Payment Link")
+            submit_clicked = col_submit.form_submit_button("Mark Submitted")
+
+        if save_clicked:
             update_order(
                 selected_file,
                 customer_name=customer_name,
@@ -407,14 +616,104 @@ with tab1:
                 total_amount=total_amount,
                 prepayment=prepayment,
                 balance_due=balance_due,
-                payment_link=payment_link,
-                envelope_id=envelope_id,
-                status="Submitted",
+                payment_mode=payment_calc["payment_mode"],
+                payment_amount=payment_calc["payment_amount"],
+                payment_label=payment_calc["payment_label"],
+                status=status or current.get("status") or "Ready",
             )
+            st.success("Changes saved")
+            st.rerun()
 
-            st.success(f"Saved. Envelope ID: {envelope_id}")
-            if payment_link:
-                st.code(payment_link)
+        if create_link_clicked:
+            try:
+                update_order(
+                    selected_file,
+                    customer_name=customer_name,
+                    customer_email=customer_email,
+                    phone=phone,
+                    sales_order=sales_order,
+                    order_date=order_date,
+                    total_amount=total_amount,
+                    prepayment=prepayment,
+                    balance_due=balance_due,
+                    payment_mode=payment_calc["payment_mode"],
+                    payment_amount=payment_calc["payment_amount"],
+                    payment_label=payment_calc["payment_label"],
+                    status=status or current.get("status") or "Ready",
+                )
+
+                link_result = create_stripe_checkout_link(
+                    customer_name=customer_name,
+                    customer_email=customer_email,
+                    sales_order=sales_order,
+                    amount=payment_calc["payment_amount"],
+                    payment_label=payment_calc["payment_label"],
+                )
+
+                safe_order = re.sub(r"[^A-Za-z0-9_-]+", "_", sales_order or Path(selected_file).stem)
+                stamped_name = f"{safe_order}_{payment_calc['payment_mode']}_payment.pdf"
+                stamped_path = STAMPED_DIR / stamped_name
+
+                add_logo_and_payment_button_to_pdf(
+                    source_pdf_path=selected_file,
+                    output_pdf_path=stamped_path,
+                    logo_path=LOGO_PATH,
+                    button_label=payment_calc["payment_label"],
+                    button_url=link_result["url"],
+                )
+
+                update_order(
+                    selected_file,
+                    payment_mode=payment_calc["payment_mode"],
+                    payment_amount=payment_calc["payment_amount"],
+                    payment_label=payment_calc["payment_label"],
+                    payment_link=link_result["url"],
+                    stripe_session_id=link_result["session_id"],
+                    stamped_pdf_path=str(stamped_path),
+                    status="Payment Link Created",
+                )
+                st.success("Stripe payment link created and PDF stamped")
+                st.code(link_result["url"])
+                st.rerun()
+            except Exception as e:
+                st.error(str(e))
+
+        if submit_clicked:
+            envelope_id = create_fake_envelope_id()
+            update_order(
+                selected_file,
+                customer_name=customer_name,
+                customer_email=customer_email,
+                phone=phone,
+                sales_order=sales_order,
+                order_date=order_date,
+                total_amount=total_amount,
+                prepayment=prepayment,
+                balance_due=balance_due,
+                payment_mode=payment_calc["payment_mode"],
+                payment_amount=payment_calc["payment_amount"],
+                payment_label=payment_calc["payment_label"],
+                status="Submitted",
+                envelope_id=envelope_id,
+            )
+            st.success(f"Marked submitted. Envelope ID: {envelope_id}")
+            st.rerun()
+
+        refreshed = get_order_by_source_file(selected_file)
+        if refreshed.get("payment_link"):
+            st.markdown("### Stored Payment Link")
+            st.code(refreshed["payment_link"])
+
+        if refreshed.get("stamped_pdf_path"):
+            stamped_file = Path(refreshed["stamped_pdf_path"])
+            if stamped_file.exists():
+                with open(stamped_file, "rb") as f:
+                    st.download_button(
+                        "Download stamped PDF",
+                        data=f.read(),
+                        file_name=stamped_file.name,
+                        mime="application/pdf",
+                    )
     else:
         st.info("No orders loaded.")
 
@@ -434,7 +733,11 @@ with tab2:
 
     quote_rows = [x for x in get_orders() if x.get("status") == "Quote"]
     if quote_rows:
-        st.dataframe(pd.DataFrame(quote_rows), use_container_width=True)
+        quote_df = pd.DataFrame(quote_rows)
+        st.dataframe(
+            quote_df[["source_file", "customer_name", "sales_order", "total_amount", "balance_due", "status"]],
+            use_container_width=True,
+        )
     else:
         st.info("No quotes loaded.")
 
@@ -496,6 +799,7 @@ with tab3:
             sms_id = create_fake_sms_id()
             update_sms_job(selected_sms_id, message=edited_message, sms_message_id=sms_id, status="Sent")
             st.success(f"SMS marked sent: {sms_id}")
+            st.rerun()
     else:
         st.info("No SMS jobs loaded.")
 
