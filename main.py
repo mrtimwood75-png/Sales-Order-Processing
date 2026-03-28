@@ -1,6 +1,5 @@
 import os
 import re
-import io
 from pathlib import Path
 
 import streamlit as st
@@ -297,6 +296,34 @@ def create_stripe_checkout_link(customer_name, customer_email, sales_order, amou
     return {"url": session.url, "session_id": session.id}
 
 
+def get_page_text_left_margin(page):
+    try:
+        blocks = page.get_text("blocks")
+    except Exception:
+        return 24
+
+    candidates = []
+    for block in blocks:
+        if len(block) < 5:
+            continue
+        x0, y0, x1, y1, text = block[:5]
+        text_clean = clean_text(text)
+        if not text_clean:
+            continue
+        if len(text_clean) < 2:
+            continue
+        if y0 < 10:
+            continue
+        candidates.append(float(x0))
+
+    if not candidates:
+        return 24
+
+    left = min(candidates)
+    left = max(18, min(left, 80))
+    return left
+
+
 def stamp_main_pdf_bytes(pdf_bytes: bytes, logo_path, button_label=None, button_url=None):
     if fitz is None:
         raise RuntimeError("PyMuPDF not installed")
@@ -307,7 +334,8 @@ def stamp_main_pdf_bytes(pdf_bytes: bytes, logo_path, button_label=None, button_
         page_width = page.rect.width
 
         if logo_path and Path(logo_path).exists():
-            logo_rect = fitz.Rect(24, 18, 150, 60)
+            left_x = get_page_text_left_margin(page)
+            logo_rect = fitz.Rect(left_x, 18, left_x + 126, 60)
             page.insert_image(
                 logo_rect,
                 filename=str(logo_path),
