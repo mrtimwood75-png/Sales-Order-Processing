@@ -172,6 +172,11 @@ def get_orders():
         return [dict(r) for r in rows]
 
 
+def get_latest_order():
+    orders = get_orders()
+    return orders[0] if orders else None
+
+
 def get_order_by_source_file(source_file: str):
     with get_conn() as conn:
         row = conn.execute("SELECT * FROM orders WHERE source_file = ?", (source_file,)).fetchone()
@@ -638,25 +643,11 @@ with tab1:
 
         order = parse_sales_order_pdf(save_path)
         upsert_order(order)
-        st.session_state["selected_order_file"] = str(save_path)
+        st.session_state["current_order_file"] = str(save_path)
         st.success(f"Loaded {uploaded_pdf.name}")
 
-    orders = get_orders()
-
-    if orders:
-        order_options = [o["source_file"] for o in orders]
-
-        if "selected_order_file" not in st.session_state or st.session_state["selected_order_file"] not in order_options:
-            st.session_state["selected_order_file"] = order_options[0]
-
-        selected_file = st.selectbox(
-            "Select order",
-            order_options,
-            key="selected_order_file",
-            format_func=lambda x: Path(x).name,
-        )
-
-        current = get_order_by_source_file(selected_file)
+    if current:
+        selected_file = current["source_file"]
 
         st.markdown("### Current Order")
         st.caption(Path(selected_file).name)
@@ -711,10 +702,9 @@ with tab1:
             stamped_pdf_path = st.text_input("Bundle PDF", value=current.get("stamped_pdf_path") or "", disabled=True)
             status = st.text_input("Status", value=current.get("status") or "")
 
-            col_save, col_link, col_bundle, col_submit = st.columns(4)
+            col_save, col_link, col_submit = st.columns(3)
             save_clicked = col_save.form_submit_button("Save Changes")
             create_link_clicked = col_link.form_submit_button("Create Stripe Link")
-            build_bundle_clicked = col_bundle.form_submit_button("Build Bundle PDF")
             submit_clicked = col_submit.form_submit_button("Mark Submitted")
 
         st.markdown("### Additional Files to Stitch Into Final PDF")
@@ -725,35 +715,85 @@ with tab1:
             key=f"attachments_{selected_file}",
         )
 
-        if extra_files:
-            order_attach_dir = ATTACHMENTS_DIR / Path(selected_file).stem
-            order_attach_dir.mkdir(parents=True, exist_ok=True)
+        col_att_a, col_att_b = st.columns([2, 1])
 
-            saved_count = 0
-            existing_names = {a["original_name"] for a in get_attachments(selected_file)}
+        if col_att_a.button("Add Files to Bundle", key=f"add_files_btn_{selected_file}"):
+            if extra_files:
+                order_attach_dir = ATTACHMENTS_DIR / Path(selected_file).stem
+                order_attach_dir.mkdir(parents=True, exist_ok=True)
 
-            for up in extra_files:
-                if up.name in existing_names:
-                    continue
+                saved_count = 0
+                for up in extra_files:
+                    dest = order_attach_dir / up.name
+                    suffix = 1
+                    while dest.exists():
+                        dest = order_attach_dir / f"{Path(up.name).stem}_{suffix}{Path(up.name).suffix}"
+                        suffix += 1
 
-                dest = order_attach_dir / up.name
-                with open(dest, "wb") as f:
-                    f.write(up.getbuffer())
-                add_attachment(selected_file, str(dest), up.name)
-                saved_count += 1
+                    with open(dest, "wb") as f:
+                        f.write(up.getbuffer())
 
-            if saved_count:
-                st.success(f"Added {saved_count} attachment file(s)")
+                    add_attachment(selected_file, str(dest), dest.name)
+                    saved_count += 1
+
+                st.success(f"Added {saved_count} attachment file(s) to bundle order")
+                st.rerun()
             else:
-                st.info("No new attachments added")
-            st.rerun()
+                st.warning("Choose files first")
+
+        if col_att_b.button("Build Bundle PDF", key=f"build_bundle_btn_{selected_file}"):
+            try:
+                refreshed_for_bundle = get_order_by_source_file(selected_file)
+                current_attachments = get_attachments(selected_file)
+
+                safe_order = re.sub(r"[^A-Za-z0-9_-]+", "_", sales_order or Path(selected_file).stem)
+                bundle_name = f"{safe_order}_bundle.pdf"
+                bundle_path = STAMPED_DIR / bundle_name
+
+                button_label = None
+                button_url = None
+                if refreshed_for_bundle.get("payment_link"):
+                    button_label = refreshed_for_bundle.get("payment_label") or "Pay Now"
+                    button_url = refreshed_for_bundle.get("payment_link")
+
+                build_bundle_pdf(
+                    source_pdf_path=selected_file,
+                    output_pdf_path=bundle_path,
+                    logo_path=LOGO_PATH,
+                    attachments=current_attachments,
+                    button_label=button_label,
+                    button_url=button_url,
+                )
+
+                update_order(
+                    selected_file,
+                    customer_name=customer_name,
+                    customer_email=customer_email,
+                    phone=phone,
+                    sales_order=sales_order,
+                    order_date=order_date,
+                    total_amount=total_amount,
+                    prepayment=prepayment,
+                    balance_due=balance_due,
+                    payment_mode=payment_calc["payment_mode"],
+                    payment_amount=payment_calc["payment_amount"],
+                    payment_label=payment_calc["payment_label"],
+                    stamped_pdf_path=str(bundle_path),
+                    status="Bundle PDF Created",
+                )
+                st.success("Bundle PDF created")
+                st.rerun()
+            except Exception as e:
+                st.error(str(e))
 
         attachments = get_attachments(selected_file)
         if attachments:
+            st.caption("Bundle order:")
             for att in attachments:
-                c1, c2 = st.columns([5, 1])
-                c1.write(att["original_name"])
-                if c2.button("Remove", key=f"remove_att_{att['id']}"):
+                c1, c2, c3 = st.columns([1, 6, 1])
+                c1.write(att["sort_order"])
+                c2.write(att["original_name"])
+                if c3.button("Remove", key=f"remove_att_{att['id']}"):
                     delete_attachment(att["id"])
                     st.rerun()
         else:
@@ -815,52 +855,6 @@ with tab1:
                 )
                 st.success("Stripe payment link created")
                 st.code(link_result["url"])
-                st.rerun()
-            except Exception as e:
-                st.error(str(e))
-
-        if build_bundle_clicked:
-            try:
-                refreshed_for_bundle = get_order_by_source_file(selected_file)
-
-                safe_order = re.sub(r"[^A-Za-z0-9_-]+", "_", sales_order or Path(selected_file).stem)
-                bundle_name = f"{safe_order}_bundle.pdf"
-                bundle_path = STAMPED_DIR / bundle_name
-
-                current_attachments = get_attachments(selected_file)
-
-                button_label = None
-                button_url = None
-                if refreshed_for_bundle.get("payment_link"):
-                    button_label = refreshed_for_bundle.get("payment_label") or "Pay Now"
-                    button_url = refreshed_for_bundle.get("payment_link")
-
-                build_bundle_pdf(
-                    source_pdf_path=selected_file,
-                    output_pdf_path=bundle_path,
-                    logo_path=LOGO_PATH,
-                    attachments=current_attachments,
-                    button_label=button_label,
-                    button_url=button_url,
-                )
-
-                update_order(
-                    selected_file,
-                    customer_name=customer_name,
-                    customer_email=customer_email,
-                    phone=phone,
-                    sales_order=sales_order,
-                    order_date=order_date,
-                    total_amount=total_amount,
-                    prepayment=prepayment,
-                    balance_due=balance_due,
-                    payment_mode=payment_calc["payment_mode"],
-                    payment_amount=payment_calc["payment_amount"],
-                    payment_label=payment_calc["payment_label"],
-                    stamped_pdf_path=str(bundle_path),
-                    status="Bundle PDF Created",
-                )
-                st.success("Bundle PDF created")
                 st.rerun()
             except Exception as e:
                 st.error(str(e))
