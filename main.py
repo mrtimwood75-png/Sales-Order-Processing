@@ -3,7 +3,6 @@ import sqlite3
 from pathlib import Path
 from datetime import datetime
 import os
-import shutil
 
 import pandas as pd
 import streamlit as st
@@ -21,8 +20,14 @@ except Exception:
 
 APP_TITLE = "BoConcept Ops App"
 
-BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = BASE_DIR / "data"
+# ============================================================
+# SET YOUR SHAREPOINT-SYNCED FOLDER HERE
+# Example:
+# SHAREPOINT_ROOT = Path(r"C:\Users\Tim\OneDrive - Your Company\BoConcept Orders")
+# ============================================================
+SHAREPOINT_ROOT = Path(r"C:\Users\YourName\OneDrive - Your Company\BoConcept Orders")
+
+DATA_DIR = SHAREPOINT_ROOT
 INCOMING_DIR = DATA_DIR / "incoming"
 STAMPED_DIR = DATA_DIR / "stamped"
 ATTACHMENTS_DIR = DATA_DIR / "attachments"
@@ -38,6 +43,7 @@ STRIPE_SUCCESS_URL = os.getenv("STRIPE_SUCCESS_URL", "https://example.com/succes
 STRIPE_CANCEL_URL = os.getenv("STRIPE_CANCEL_URL", "https://example.com/cancel").strip()
 STRIPE_CURRENCY = os.getenv("STRIPE_CURRENCY", "aud").strip().lower()
 
+BASE_DIR = Path(__file__).resolve().parent
 LOGO_PATH = Path(os.getenv("BOCONCEPT_LOGO_PATH", str(BASE_DIR / "assets" / "boconcept_logo.png")))
 
 
@@ -507,7 +513,7 @@ def create_stripe_checkout_link(customer_name, customer_email, sales_order, amou
     }
 
 
-def add_logo_and_payment_button_to_pdf(source_pdf_path, output_pdf_path, logo_path, button_label, button_url):
+def add_logo_and_optional_payment_button(source_pdf_path, output_pdf_path, logo_path, button_label=None, button_url=None):
     if fitz is None:
         raise RuntimeError("PyMuPDF not installed. Add 'pymupdf' to requirements.txt")
 
@@ -527,34 +533,35 @@ def add_logo_and_payment_button_to_pdf(source_pdf_path, output_pdf_path, logo_pa
             logo_rect = fitz.Rect(24, 18, 144, 58)
             page.insert_image(logo_rect, filename=str(logo_path), keep_proportion=True, overlay=True)
 
-        button_width = 170
-        button_height = 28
-        x1 = page_width - 24 - button_width
-        y1 = 20
-        button_rect = fitz.Rect(x1, y1, x1 + button_width, y1 + button_height)
+        if button_label and button_url:
+            button_width = 170
+            button_height = 28
+            x1 = page_width - 24 - button_width
+            y1 = 20
+            button_rect = fitz.Rect(x1, y1, x1 + button_width, y1 + button_height)
 
-        shape = page.new_shape()
-        shape.draw_rect(button_rect)
-        shape.finish(color=(0.0, 0.0, 0.0), fill=(0.0, 0.0, 0.0), width=1)
-        shape.commit()
+            shape = page.new_shape()
+            shape.draw_rect(button_rect)
+            shape.finish(color=(0.0, 0.0, 0.0), fill=(0.0, 0.0, 0.0), width=1)
+            shape.commit()
 
-        page.insert_textbox(
-            button_rect,
-            button_label,
-            fontsize=10,
-            fontname="helv",
-            color=(1, 1, 1),
-            align=1,
-            overlay=True,
-        )
+            page.insert_textbox(
+                button_rect,
+                button_label,
+                fontsize=10,
+                fontname="helv",
+                color=(1, 1, 1),
+                align=1,
+                overlay=True,
+            )
 
-        page.insert_link(
-            {
-                "kind": fitz.LINK_URI,
-                "from": button_rect,
-                "uri": button_url,
-            }
-        )
+            page.insert_link(
+                {
+                    "kind": fitz.LINK_URI,
+                    "from": button_rect,
+                    "uri": button_url,
+                }
+            )
 
     doc.save(output_pdf_path, garbage=4, deflate=True)
     doc.close()
@@ -582,12 +589,12 @@ def append_file_to_pdf(bundle_doc, attachment_path: Path):
     raise RuntimeError(f"Unsupported attachment type: {attachment_path.name}")
 
 
-def build_final_bundle_pdf(source_pdf_path, output_pdf_path, logo_path, button_label, button_url, attachments):
+def build_bundle_pdf(source_pdf_path, output_pdf_path, logo_path, attachments, button_label=None, button_url=None):
     if fitz is None:
         raise RuntimeError("PyMuPDF not installed. Add 'pymupdf' to requirements.txt")
 
     temp_main_pdf = output_pdf_path.with_name(output_pdf_path.stem + "_main.pdf")
-    add_logo_and_payment_button_to_pdf(
+    add_logo_and_optional_payment_button(
         source_pdf_path=source_pdf_path,
         output_pdf_path=temp_main_pdf,
         logo_path=logo_path,
@@ -704,9 +711,10 @@ with tab1:
             stamped_pdf_path = st.text_input("Bundle PDF", value=current.get("stamped_pdf_path") or "", disabled=True)
             status = st.text_input("Status", value=current.get("status") or "")
 
-            col_save, col_link, col_submit = st.columns(3)
+            col_save, col_link, col_bundle, col_submit = st.columns(4)
             save_clicked = col_save.form_submit_button("Save Changes")
-            create_link_clicked = col_link.form_submit_button("Create Stripe Payment Link + Bundle PDF")
+            create_link_clicked = col_link.form_submit_button("Create Stripe Link")
+            build_bundle_clicked = col_bundle.form_submit_button("Build Bundle PDF")
             submit_clicked = col_submit.form_submit_button("Mark Submitted")
 
         st.markdown("### Additional Files to Stitch Into Final PDF")
@@ -722,14 +730,22 @@ with tab1:
             order_attach_dir.mkdir(parents=True, exist_ok=True)
 
             saved_count = 0
+            existing_names = {a["original_name"] for a in get_attachments(selected_file)}
+
             for up in extra_files:
+                if up.name in existing_names:
+                    continue
+
                 dest = order_attach_dir / up.name
                 with open(dest, "wb") as f:
                     f.write(up.getbuffer())
                 add_attachment(selected_file, str(dest), up.name)
                 saved_count += 1
 
-            st.success(f"Added {saved_count} attachment file(s)")
+            if saved_count:
+                st.success(f"Added {saved_count} attachment file(s)")
+            else:
+                st.info("No new attachments added")
             st.rerun()
 
         attachments = get_attachments(selected_file)
@@ -788,21 +804,6 @@ with tab1:
                     payment_label=payment_calc["payment_label"],
                 )
 
-                safe_order = re.sub(r"[^A-Za-z0-9_-]+", "_", sales_order or Path(selected_file).stem)
-                bundle_name = f"{safe_order}_{payment_calc['payment_mode']}_bundle.pdf"
-                bundle_path = STAMPED_DIR / bundle_name
-
-                current_attachments = get_attachments(selected_file)
-
-                build_final_bundle_pdf(
-                    source_pdf_path=selected_file,
-                    output_pdf_path=bundle_path,
-                    logo_path=LOGO_PATH,
-                    button_label=payment_calc["payment_label"],
-                    button_url=link_result["url"],
-                    attachments=current_attachments,
-                )
-
                 update_order(
                     selected_file,
                     payment_mode=payment_calc["payment_mode"],
@@ -810,11 +811,56 @@ with tab1:
                     payment_label=payment_calc["payment_label"],
                     payment_link=link_result["url"],
                     stripe_session_id=link_result["session_id"],
-                    stamped_pdf_path=str(bundle_path),
                     status="Payment Link Created",
                 )
-                st.success("Stripe payment link created and bundled PDF generated")
+                st.success("Stripe payment link created")
                 st.code(link_result["url"])
+                st.rerun()
+            except Exception as e:
+                st.error(str(e))
+
+        if build_bundle_clicked:
+            try:
+                refreshed_for_bundle = get_order_by_source_file(selected_file)
+
+                safe_order = re.sub(r"[^A-Za-z0-9_-]+", "_", sales_order or Path(selected_file).stem)
+                bundle_name = f"{safe_order}_bundle.pdf"
+                bundle_path = STAMPED_DIR / bundle_name
+
+                current_attachments = get_attachments(selected_file)
+
+                button_label = None
+                button_url = None
+                if refreshed_for_bundle.get("payment_link"):
+                    button_label = refreshed_for_bundle.get("payment_label") or "Pay Now"
+                    button_url = refreshed_for_bundle.get("payment_link")
+
+                build_bundle_pdf(
+                    source_pdf_path=selected_file,
+                    output_pdf_path=bundle_path,
+                    logo_path=LOGO_PATH,
+                    attachments=current_attachments,
+                    button_label=button_label,
+                    button_url=button_url,
+                )
+
+                update_order(
+                    selected_file,
+                    customer_name=customer_name,
+                    customer_email=customer_email,
+                    phone=phone,
+                    sales_order=sales_order,
+                    order_date=order_date,
+                    total_amount=total_amount,
+                    prepayment=prepayment,
+                    balance_due=balance_due,
+                    payment_mode=payment_calc["payment_mode"],
+                    payment_amount=payment_calc["payment_amount"],
+                    payment_label=payment_calc["payment_label"],
+                    stamped_pdf_path=str(bundle_path),
+                    status="Bundle PDF Created",
+                )
+                st.success("Bundle PDF created")
                 st.rerun()
             except Exception as e:
                 st.error(str(e))
