@@ -22,6 +22,10 @@ STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "").strip()
 STRIPE_SUCCESS_URL = os.getenv("STRIPE_SUCCESS_URL", "https://example.com/success").strip()
 STRIPE_CANCEL_URL = os.getenv("STRIPE_CANCEL_URL", "https://example.com/cancel").strip()
 STRIPE_CURRENCY = os.getenv("STRIPE_CURRENCY", "aud").strip().lower()
+STRIPE_TEST_FALLBACK_URL = os.getenv(
+    "STRIPE_TEST_FALLBACK_URL",
+    "https://buy.stripe.com/test_14A5kC7WQ3KQ4qQeUU",
+).strip()
 
 
 def resolve_logo_path():
@@ -228,20 +232,21 @@ def parse_sales_order_pdf_bytes(pdf_bytes: bytes):
 
 
 def payment_choice_to_values(choice: str, balance_due: float):
-    bal = float(balance_due or 0)
+    bal = round(float(balance_due or 0), 2)
     if bal <= 0:
         raise RuntimeError("Balance due must be greater than 0")
 
     if choice == "deposit":
+        deposit_amount = round(bal * 0.50, 2)
         return {
             "payment_mode": "deposit",
-            "payment_amount": round(bal * 0.50, 2),
+            "payment_amount": deposit_amount,
             "payment_label": "Pay 50% Deposit Now",
         }
 
     return {
         "payment_mode": "balance",
-        "payment_amount": round(bal, 2),
+        "payment_amount": bal,
         "payment_label": "Pay Balance Now",
     }
 
@@ -255,45 +260,48 @@ def ensure_stripe_ready():
 
 
 def create_stripe_checkout_link(customer_name, customer_email, sales_order, amount, payment_label):
-    ensure_stripe_ready()
+    if STRIPE_SECRET_KEY and stripe is not None:
+        ensure_stripe_ready()
 
-    amount_value = float(amount or 0)
-    if amount_value <= 0:
-        raise RuntimeError("Payment amount must be greater than 0")
+        amount_value = float(amount or 0)
+        if amount_value <= 0:
+            raise RuntimeError("Payment amount must be greater than 0")
 
-    unit_amount = int(round(amount_value * 100))
-    order_ref = sales_order or "Order"
+        unit_amount = int(round(amount_value * 100))
+        order_ref = sales_order or "Order"
 
-    session = stripe.checkout.Session.create(
-        mode="payment",
-        success_url=STRIPE_SUCCESS_URL,
-        cancel_url=STRIPE_CANCEL_URL,
-        customer_email=customer_email or None,
-        client_reference_id=order_ref,
-        payment_method_types=["card"],
-        line_items=[
-            {
-                "quantity": 1,
-                "price_data": {
-                    "currency": STRIPE_CURRENCY,
-                    "unit_amount": unit_amount,
-                    "product_data": {
-                        "name": payment_label,
-                        "description": f"BoConcept order {order_ref}",
+        session = stripe.checkout.Session.create(
+            mode="payment",
+            success_url=STRIPE_SUCCESS_URL,
+            cancel_url=STRIPE_CANCEL_URL,
+            customer_email=customer_email or None,
+            client_reference_id=order_ref,
+            payment_method_types=["card"],
+            line_items=[
+                {
+                    "quantity": 1,
+                    "price_data": {
+                        "currency": STRIPE_CURRENCY,
+                        "unit_amount": unit_amount,
+                        "product_data": {
+                            "name": payment_label,
+                            "description": f"BoConcept order {order_ref}",
+                        },
                     },
-                },
-            }
-        ],
-        metadata={
-            "sales_order": order_ref,
-            "customer_name": customer_name or "",
-            "customer_email": customer_email or "",
-            "payment_label": payment_label,
-            "payment_amount": f"{amount_value:.2f}",
-        },
-    )
+                }
+            ],
+            metadata={
+                "sales_order": order_ref,
+                "customer_name": customer_name or "",
+                "customer_email": customer_email or "",
+                "payment_label": payment_label,
+                "payment_amount": f"{amount_value:.2f}",
+            },
+        )
 
-    return {"url": session.url, "session_id": session.id}
+        return {"url": session.url, "session_id": session.id}
+
+    return {"url": STRIPE_TEST_FALLBACK_URL, "session_id": "test_link"}
 
 
 def get_page_text_left_margin(page):
@@ -310,8 +318,6 @@ def get_page_text_left_margin(page):
         text_clean = clean_text(text)
         if not text_clean:
             continue
-        if len(text_clean) < 2:
-            continue
         if y0 < 10:
             continue
         candidates.append(float(x0))
@@ -320,8 +326,32 @@ def get_page_text_left_margin(page):
         return 24
 
     left = min(candidates)
-    left = max(18, min(left, 80))
-    return left
+    return max(18, min(left, 80))
+
+
+def find_balance_anchor_on_last_page(page):
+    try:
+        words = page.get_text("words")
+    except Exception:
+        words = []
+
+    if not words:
+        return None
+
+    # words format: x0, y0, x1, y1, word, block_no, line_no, word_no
+    balance_words = []
+    for w in words:
+        text = str(w[4]).strip().lower()
+        if text in {"balance", "due", "final", "balance due"}:
+            balance_words.append(w)
+
+    if not balance_words:
+        return None
+
+    target = max(balance_words, key=lambda w: (w[3], w[1]))
+    x0, y0, x1, y1 = float(target[0]), float(target[1]), float(target[2]), float(target[3])
+
+    return x0, y1
 
 
 def stamp_main_pdf_bytes(pdf_bytes: bytes, logo_path, button_label=None, button_url=None):
@@ -330,7 +360,7 @@ def stamp_main_pdf_bytes(pdf_bytes: bytes, logo_path, button_label=None, button_
 
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
 
-    for page in doc:
+    for i, page in enumerate(doc):
         page_width = page.rect.width
 
         if logo_path and Path(logo_path).exists():
@@ -343,12 +373,23 @@ def stamp_main_pdf_bytes(pdf_bytes: bytes, logo_path, button_label=None, button_
                 overlay=True,
             )
 
-        if button_label and button_url:
+        if button_label and button_url and i == len(doc) - 1:
+            anchor = find_balance_anchor_on_last_page(page)
+
+            if anchor:
+                btn_x = anchor[0]
+                btn_y = anchor[1] + 10
+            else:
+                btn_x = get_page_text_left_margin(page)
+                btn_y = page.rect.height - 90
+
             button_width = 180
             button_height = 30
-            x1 = page_width - 24 - button_width
-            y1 = 20
-            button_rect = fitz.Rect(x1, y1, x1 + button_width, y1 + button_height)
+
+            if btn_x + button_width > page_width - 24:
+                btn_x = page_width - 24 - button_width
+
+            button_rect = fitz.Rect(btn_x, btn_y, btn_x + button_width, btn_y + button_height)
 
             shape = page.new_shape()
             shape.draw_rect(button_rect)
@@ -453,7 +494,10 @@ uploaded_pdf = st.file_uploader("Upload sales order PDF", type=["pdf"], key="ord
 if uploaded_pdf is not None:
     pdf_bytes = uploaded_pdf.getvalue()
 
-    if st.session_state.get("order_pdf_name") != uploaded_pdf.name:
+    if (
+        st.session_state.get("order_pdf_name") != uploaded_pdf.name
+        or st.session_state.get("order_pdf_bytes") != pdf_bytes
+    ):
         parsed = parse_sales_order_pdf_bytes(pdf_bytes)
 
         st.session_state["order_pdf_name"] = uploaded_pdf.name
@@ -480,10 +524,11 @@ if st.session_state.get("order_pdf_bytes"):
     st.markdown("### Current Order")
     st.caption(st.session_state.get("order_pdf_name", ""))
 
-    c1, c2, c3 = st.columns(3)
+    c1, c2, c3, c4 = st.columns(4)
     c1.metric("Total", format_money(st.session_state.get("total_amount")))
     c2.metric("Prepayment", format_money(st.session_state.get("prepayment")))
     c3.metric("Balance due", format_money(st.session_state.get("balance_due")))
+    c4.metric("Payment amount", format_money(st.session_state.get("payment_amount")))
 
     with st.form("order_form"):
         customer_name = st.text_input("Customer name", value=st.session_state.get("customer_name", ""))
@@ -508,7 +553,11 @@ if st.session_state.get("order_pdf_bytes"):
         )
 
         payment_calc = payment_choice_to_values(payment_choice, balance_due)
-        st.info(f"{payment_calc['payment_label']} — Amount: {format_money(payment_calc['payment_amount'])}")
+        st.info(
+            f"{payment_calc['payment_label']} — "
+            f"Balance due: {format_money(balance_due)} — "
+            f"Payment amount: {format_money(payment_calc['payment_amount'])}"
+        )
 
         st.text_input("Payment link", value=st.session_state.get("payment_link", ""), disabled=True)
         st.text_input("Stripe session ID", value=st.session_state.get("stripe_session_id", ""), disabled=True)
