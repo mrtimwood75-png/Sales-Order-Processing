@@ -22,7 +22,13 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
-streamlit run app/main.py
+streamlit run main.py
+```
+
+If startup feels slow, try:
+
+```bash
+streamlit run main.py --server.fileWatcherType none
 ```
 
 ## Notes
