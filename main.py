@@ -587,6 +587,11 @@ if LOGO_PATH:
 else:
     top_a.error("BoConcept logo not found in assets folder")
 
+if STRIPE_SECRET_KEY:
+    st.caption("Stripe mode: live/session creation enabled")
+else:
+    st.warning("Stripe secret missing. Fallback test link will be used.")
+
 default_attachments = get_default_attachments()
 if default_attachments:
     st.caption(f"Locked default bundle files: {len(default_attachments)}")
@@ -652,7 +657,7 @@ if st.session_state.get("order_pdf_bytes"):
             horizontal=True,
         )
 
-        col_g, col_h, col_i, col_j = st.columns(4)
+        col_g, col_h, col_i, col_j, col_k = st.columns(5)
         total_amount = col_g.text_input("Total", value=f"{float(st.session_state.get('total_amount', 0.0)):.2f}")
         prepayment = col_h.text_input("Prepayment", value=f"{float(st.session_state.get('prepayment', 0.0)):.2f}")
         balance_due = col_i.text_input("Balance due", value=f"{float(st.session_state.get('balance_due', 0.0)):.2f}")
@@ -660,14 +665,26 @@ if st.session_state.get("order_pdf_bytes"):
         parsed_total_amount = parse_numeric_input(total_amount, st.session_state.get("total_amount", 0.0))
         parsed_prepayment = parse_numeric_input(prepayment, st.session_state.get("prepayment", 0.0))
         parsed_balance_due = parse_numeric_input(balance_due, st.session_state.get("balance_due", 0.0))
+
         payment_calc = payment_choice_to_values(payment_choice, parsed_balance_due)
 
-        col_j.metric("Payment amount", format_money(payment_calc["payment_amount"]))
+        current_payment_amount = st.session_state.get("payment_amount", payment_calc["payment_amount"])
+        if st.session_state.get("payment_mode") != payment_choice:
+            current_payment_amount = payment_calc["payment_amount"]
+
+        payment_amount_input = col_j.text_input(
+            "Payment amount",
+            value=f"{float(current_payment_amount):.2f}",
+        )
+        overridden_payment_amount = parse_numeric_input(payment_amount_input, payment_calc["payment_amount"])
+        col_k.metric("Default", format_money(payment_calc["payment_amount"]))
+
+        effective_payment_label = "Pay 50% Deposit Now" if payment_choice == "deposit" else "Pay Balance Now"
 
         st.caption(
-            f"{payment_calc['payment_label']}  |  "
+            f"{effective_payment_label}  |  "
             f"Balance due: {format_money(parsed_balance_due)}  |  "
-            f"Payment amount: {format_money(payment_calc['payment_amount'])}"
+            f"Payment amount: {format_money(overridden_payment_amount)}"
         )
 
         if st.session_state.get("payment_link"):
@@ -686,9 +703,9 @@ if st.session_state.get("order_pdf_bytes"):
         st.session_state["total_amount"] = parsed_total_amount
         st.session_state["prepayment"] = parsed_prepayment
         st.session_state["balance_due"] = parsed_balance_due
-        st.session_state["payment_mode"] = payment_calc["payment_mode"]
-        st.session_state["payment_amount"] = payment_calc["payment_amount"]
-        st.session_state["payment_label"] = payment_calc["payment_label"]
+        st.session_state["payment_mode"] = payment_choice
+        st.session_state["payment_amount"] = overridden_payment_amount
+        st.session_state["payment_label"] = effective_payment_label
         st.success("Changes applied to current session")
         st.rerun()
 
@@ -702,16 +719,16 @@ if st.session_state.get("order_pdf_bytes"):
             st.session_state["total_amount"] = parsed_total_amount
             st.session_state["prepayment"] = parsed_prepayment
             st.session_state["balance_due"] = parsed_balance_due
-            st.session_state["payment_mode"] = payment_calc["payment_mode"]
-            st.session_state["payment_amount"] = payment_calc["payment_amount"]
-            st.session_state["payment_label"] = payment_calc["payment_label"]
+            st.session_state["payment_mode"] = payment_choice
+            st.session_state["payment_amount"] = overridden_payment_amount
+            st.session_state["payment_label"] = effective_payment_label
 
             link_result = create_stripe_checkout_link(
                 customer_name=customer_name,
                 customer_email=customer_email,
                 sales_order=sales_order,
-                amount=payment_calc["payment_amount"],
-                payment_label=payment_calc["payment_label"],
+                amount=overridden_payment_amount,
+                payment_label=effective_payment_label,
             )
 
             st.session_state["payment_link"] = link_result["url"]
