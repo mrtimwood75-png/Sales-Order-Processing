@@ -20,41 +20,31 @@ except Exception:
 
 APP_TITLE = "BoConcept Ops App"
 
-DEFAULT_DESTINATION = r"C:\Users\YourName\OneDrive - Your Company\BoConcept Orders"
+BASE_DIR = Path(__file__).resolve().parent
+DATA_DIR = BASE_DIR / "data"
+INCOMING_DIR = DATA_DIR / "incoming"
+STAMPED_DIR = DATA_DIR / "stamped"
+ATTACHMENTS_DIR = DATA_DIR / "attachments"
+DB_PATH = DATA_DIR / "ops_app.db"
 
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "").strip()
 STRIPE_SUCCESS_URL = os.getenv("STRIPE_SUCCESS_URL", "https://example.com/success").strip()
 STRIPE_CANCEL_URL = os.getenv("STRIPE_CANCEL_URL", "https://example.com/cancel").strip()
 STRIPE_CURRENCY = os.getenv("STRIPE_CURRENCY", "aud").strip().lower()
 
-BASE_DIR = Path(__file__).resolve().parent
 LOGO_PATH = Path(os.getenv("BOCONCEPT_LOGO_PATH", str(BASE_DIR / "assets" / "boconcept_logo.png")))
 
 
-def get_storage_paths():
-    root_str = st.session_state.get("destination_folder", DEFAULT_DESTINATION)
-    root = Path(root_str)
-    return {
-        "root": root,
-        "incoming": root / "incoming",
-        "stamped": root / "stamped",
-        "attachments": root / "attachments",
-        "db": root / "ops_app.db",
-    }
-
-
 def ensure_storage():
-    paths = get_storage_paths()
-    paths["root"].mkdir(parents=True, exist_ok=True)
-    paths["incoming"].mkdir(parents=True, exist_ok=True)
-    paths["stamped"].mkdir(parents=True, exist_ok=True)
-    paths["attachments"].mkdir(parents=True, exist_ok=True)
-    return paths
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    INCOMING_DIR.mkdir(parents=True, exist_ok=True)
+    STAMPED_DIR.mkdir(parents=True, exist_ok=True)
+    ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def get_conn():
-    paths = ensure_storage()
-    conn = sqlite3.connect(paths["db"])
+    ensure_storage()
+    conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -541,19 +531,24 @@ def add_logo_and_optional_payment_button(source_pdf_path, output_pdf_path, logo_
         page_width = page.rect.width
 
         if logo_path and logo_path.exists():
-            logo_rect = fitz.Rect(24, 18, 144, 58)
-            page.insert_image(logo_rect, filename=str(logo_path), keep_proportion=True, overlay=True)
+            logo_rect = fitz.Rect(24, 18, 150, 60)
+            page.insert_image(
+                logo_rect,
+                filename=str(logo_path),
+                keep_proportion=True,
+                overlay=True,
+            )
 
         if button_label and button_url:
-            button_width = 170
-            button_height = 28
+            button_width = 180
+            button_height = 30
             x1 = page_width - 24 - button_width
             y1 = 20
             button_rect = fitz.Rect(x1, y1, x1 + button_width, y1 + button_height)
 
             shape = page.new_shape()
             shape.draw_rect(button_rect)
-            shape.finish(color=(0.0, 0.0, 0.0), fill=(0.0, 0.0, 0.0), width=1)
+            shape.finish(color=(0, 0, 0), fill=(0, 0, 0), width=1)
             shape.commit()
 
             page.insert_textbox(
@@ -578,6 +573,16 @@ def add_logo_and_optional_payment_button(source_pdf_path, output_pdf_path, logo_
     doc.close()
 
 
+def append_image_as_pdf_pages(bundle_doc, image_path: Path):
+    img_doc = fitz.open()
+    img = fitz.Pixmap(str(image_path))
+    page = img_doc.new_page(width=img.width, height=img.height)
+    rect = fitz.Rect(0, 0, img.width, img.height)
+    page.insert_image(rect, filename=str(image_path))
+    bundle_doc.insert_pdf(img_doc)
+    img_doc.close()
+
+
 def append_file_to_pdf(bundle_doc, attachment_path: Path):
     ext = attachment_path.suffix.lower()
 
@@ -588,24 +593,23 @@ def append_file_to_pdf(bundle_doc, attachment_path: Path):
         return
 
     if ext in [".png", ".jpg", ".jpeg", ".webp"]:
-        img_doc = fitz.open(attachment_path)
-        pdf_bytes = img_doc.convert_to_pdf()
-        img_doc.close()
-
-        img_pdf = fitz.open("pdf", pdf_bytes)
-        bundle_doc.insert_pdf(img_pdf)
-        img_pdf.close()
+        append_image_as_pdf_pages(bundle_doc, attachment_path)
         return
 
     raise RuntimeError(f"Unsupported attachment type: {attachment_path.name}")
 
 
-def build_bundle_pdf(source_pdf_path, output_pdf_path, logo_path, attachments, button_label=None, button_url=None):
+def build_single_bundle_pdf(source_pdf_path, output_pdf_path, logo_path, attachments, button_label=None, button_url=None):
     if fitz is None:
         raise RuntimeError("PyMuPDF not installed. Add 'pymupdf' to requirements.txt")
 
+    source_pdf_path = Path(source_pdf_path)
     output_pdf_path = Path(output_pdf_path)
-    temp_main_pdf = output_pdf_path.with_name(output_pdf_path.stem + "_main.pdf")
+
+    if not source_pdf_path.exists():
+        raise RuntimeError(f"Order PDF not found: {source_pdf_path}")
+
+    temp_main_pdf = output_pdf_path.with_name(output_pdf_path.stem + "_main_temp.pdf")
 
     add_logo_and_optional_payment_button(
         source_pdf_path=source_pdf_path,
@@ -615,20 +619,20 @@ def build_bundle_pdf(source_pdf_path, output_pdf_path, logo_path, attachments, b
         button_url=button_url,
     )
 
-    bundle = fitz.open()
+    final_doc = fitz.open()
 
-    main_doc = fitz.open(temp_main_pdf)
-    bundle.insert_pdf(main_doc)
-    main_doc.close()
+    stamped_main = fitz.open(temp_main_pdf)
+    final_doc.insert_pdf(stamped_main)
+    stamped_main.close()
 
     for att in attachments:
         att_path = Path(att["attachment_path"])
         if not att_path.exists():
             raise RuntimeError(f"Attachment not found: {att_path}")
-        append_file_to_pdf(bundle, att_path)
+        append_file_to_pdf(final_doc, att_path)
 
-    bundle.save(output_pdf_path, garbage=4, deflate=True)
-    bundle.close()
+    final_doc.save(output_pdf_path, garbage=4, deflate=True)
+    final_doc.close()
 
     if temp_main_pdf.exists():
         temp_main_pdf.unlink()
@@ -636,35 +640,16 @@ def build_bundle_pdf(source_pdf_path, output_pdf_path, logo_path, attachments, b
     return output_pdf_path
 
 
+ensure_storage()
+init_db()
+
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 st.title(APP_TITLE)
 
-st.markdown("### Destination Folder")
-dest_col1, dest_col2 = st.columns([5, 1])
-
-destination_input = dest_col1.text_input(
-    "SharePoint / destination folder path",
-    value=st.session_state.get("destination_folder", DEFAULT_DESTINATION),
-)
-
-if dest_col2.button("Set Destination Folder"):
-    try:
-        test_path = Path(destination_input)
-        test_path.mkdir(parents=True, exist_ok=True)
-        st.session_state["destination_folder"] = str(test_path)
-        init_db()
-        st.success(f"Destination set to: {test_path}")
-        st.rerun()
-    except Exception as e:
-        st.error(f"Invalid destination folder: {e}")
-
-current_paths = ensure_storage()
-init_db()
-
-st.caption(f"Current destination: {current_paths['root']}")
-st.caption(f"Incoming: {current_paths['incoming']}")
-st.caption(f"Stamped: {current_paths['stamped']}")
-st.caption(f"Attachments: {current_paths['attachments']}")
+st.caption(f"Destination: {DATA_DIR}")
+st.caption(f"Incoming: {INCOMING_DIR}")
+st.caption(f"Stamped: {STAMPED_DIR}")
+st.caption(f"Attachments: {ATTACHMENTS_DIR}")
 
 tab1, tab2, tab3, tab4 = st.tabs(
     ["Pending Orders", "Pending Quotes", "Ready SMS", "History"]
@@ -675,7 +660,7 @@ with tab1:
 
     uploaded_pdf = st.file_uploader("Upload sales order PDF", type=["pdf"], key="orders_pdf")
     if uploaded_pdf is not None:
-        save_path = current_paths["incoming"] / uploaded_pdf.name
+        save_path = INCOMING_DIR / uploaded_pdf.name
         with open(save_path, "wb") as f:
             f.write(uploaded_pdf.getbuffer())
 
@@ -834,7 +819,7 @@ with tab1:
 
         if col_att_a.button("Add Files to Bundle", key=f"add_files_btn_{selected_file}"):
             if extra_files:
-                order_attach_dir = current_paths["attachments"] / Path(selected_file).stem
+                order_attach_dir = ATTACHMENTS_DIR / Path(selected_file).stem
                 order_attach_dir.mkdir(parents=True, exist_ok=True)
 
                 saved_count = 0
@@ -861,9 +846,10 @@ with tab1:
         if col_att_b.button("Build Bundle PDF", key=f"build_bundle_btn_{selected_file}"):
             try:
                 refreshed = get_order_by_source_file(selected_file)
+
                 safe_order = re.sub(r"[^A-Za-z0-9_-]+", "_", refreshed.get("sales_order") or Path(selected_file).stem)
                 bundle_name = f"{safe_order}_bundle.pdf"
-                bundle_path = current_paths["stamped"] / bundle_name
+                bundle_path = STAMPED_DIR / bundle_name
 
                 button_label = None
                 button_url = None
@@ -871,7 +857,7 @@ with tab1:
                     button_label = refreshed.get("payment_label") or "Pay Now"
                     button_url = refreshed.get("payment_link")
 
-                built_path = build_bundle_pdf(
+                built_path = build_single_bundle_pdf(
                     source_pdf_path=selected_file,
                     output_pdf_path=bundle_path,
                     logo_path=LOGO_PATH,
@@ -886,8 +872,9 @@ with tab1:
                     status="Bundle PDF Created",
                 )
 
-                st.success(f"Bundle PDF created: {built_path}")
+                st.success(f"Single bundled PDF created: {built_path}")
                 st.rerun()
+
             except Exception as e:
                 st.error(f"Bundle build failed: {e}")
 
@@ -928,7 +915,7 @@ with tab2:
 
     uploaded_quote = st.file_uploader("Upload quote PDF", type=["pdf"], key="quotes_pdf")
     if uploaded_quote is not None:
-        save_path = current_paths["incoming"] / uploaded_quote.name
+        save_path = INCOMING_DIR / uploaded_quote.name
         with open(save_path, "wb") as f:
             f.write(uploaded_quote.getbuffer())
 
@@ -952,7 +939,7 @@ with tab3:
 
     uploaded_excel = st.file_uploader("Upload ready-for-delivery Excel", type=["xlsx", "xls"], key="sms_excel")
     if uploaded_excel is not None:
-        excel_path = current_paths["root"] / uploaded_excel.name
+        excel_path = DATA_DIR / uploaded_excel.name
         with open(excel_path, "wb") as f:
             f.write(uploaded_excel.getbuffer())
 
