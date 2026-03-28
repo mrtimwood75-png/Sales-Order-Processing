@@ -49,7 +49,39 @@ def resolve_logo_path():
     return None
 
 
+def resolve_default_attachment_path():
+    candidates = [
+        BASE_DIR / "assets" / "01 BCA_Terms_Conditions.pdf",
+        BASE_DIR / "assets" / "01_BCA_Terms_Conditions.pdf",
+        Path("/mnt/data/01 BCA_Terms_Conditions.pdf"),
+    ]
+
+    env_path = os.getenv("DEFAULT_BUNDLE_ATTACHMENT_PATH", "").strip()
+    if env_path:
+        p = Path(env_path)
+        if p.exists():
+            return p
+
+    for p in candidates:
+        if p.exists():
+            return p
+
+    return None
+
+
 LOGO_PATH = resolve_logo_path()
+DEFAULT_ATTACHMENT_PATH = resolve_default_attachment_path()
+
+
+def get_default_attachment():
+    if not DEFAULT_ATTACHMENT_PATH or not DEFAULT_ATTACHMENT_PATH.exists():
+        return None
+
+    return {
+        "name": DEFAULT_ATTACHMENT_PATH.name,
+        "bytes": DEFAULT_ATTACHMENT_PATH.read_bytes(),
+        "locked": True,
+    }
 
 
 def reset_session():
@@ -76,6 +108,14 @@ def reset_session():
     for k in keys:
         if k in st.session_state:
             del st.session_state[k]
+
+
+def initialise_default_attachments():
+    default_attachment = get_default_attachment()
+    if default_attachment:
+        st.session_state["attachments"] = [default_attachment]
+    else:
+        st.session_state["attachments"] = []
 
 
 def clean_text(value):
@@ -360,10 +400,10 @@ def find_balance_anchor_on_last_page(page):
 
 
 def draw_3d_button(page, rect, label, url):
-    base_fill = (0.33, 0.42, 0.45)
-    highlight = (0.43, 0.52, 0.56)
-    shadow = (0.20, 0.26, 0.29)
-    arrow_panel = (0.26, 0.34, 0.37)
+    base_fill = (0.34, 0.43, 0.46)
+    highlight = (0.45, 0.55, 0.58)
+    shadow = (0.21, 0.28, 0.30)
+    arrow_panel = (0.28, 0.36, 0.39)
     border = (0.24, 0.31, 0.34)
 
     shape = page.new_shape()
@@ -401,11 +441,10 @@ def draw_3d_button(page, rect, label, url):
         overlay=True,
     )
 
-    arrow = "›"
     arrow_rect = fitz.Rect(divider_x, rect.y0 + 1, rect.x1, rect.y1 - 1)
     page.insert_textbox(
         arrow_rect,
-        arrow,
+        "›",
         fontsize=24,
         fontname="helv",
         color=(1, 1, 1),
@@ -535,6 +574,11 @@ if LOGO_PATH:
 else:
     top_a.error("BoConcept logo not found in assets folder")
 
+if DEFAULT_ATTACHMENT_PATH:
+    st.caption(f"Default bundle file locked in: {DEFAULT_ATTACHMENT_PATH.name}")
+else:
+    st.warning("Default bundle file not found")
+
 if top_b.button("Reset Session"):
     reset_session()
     st.rerun()
@@ -554,7 +598,7 @@ if uploaded_pdf is not None:
 
         st.session_state["order_pdf_name"] = uploaded_pdf.name
         st.session_state["order_pdf_bytes"] = pdf_bytes
-        st.session_state["attachments"] = []
+        initialise_default_attachments()
         st.session_state["payment_link"] = ""
         st.session_state["stripe_session_id"] = ""
         st.session_state["bundle_pdf_bytes"] = None
@@ -597,9 +641,9 @@ if st.session_state.get("order_pdf_bytes"):
         sales_order = st.text_input("Sales order", value=st.session_state.get("sales_order", ""))
         order_date = st.text_input("Order date", value=st.session_state.get("order_date", ""))
 
-        total_amount = st.number_input("Total amount", min_value=0.0, value=float(st.session_state.get("total_amount", 0.0)), step=0.01)
-        prepayment = st.number_input("Prepayment", min_value=0.0, value=float(st.session_state.get("prepayment", 0.0)), step=0.01)
-        balance_due = st.number_input("Balance due", min_value=0.0, value=float(st.session_state.get("balance_due", 0.0)), step=0.01)
+        total_amount = st.text_input("Total amount", value=f"{float(st.session_state.get('total_amount', 0.0)):.2f}")
+        prepayment = st.text_input("Prepayment", value=f"{float(st.session_state.get('prepayment', 0.0)):.2f}")
+        balance_due = st.text_input("Balance due", value=f"{float(st.session_state.get('balance_due', 0.0)):.2f}")
 
         payment_index = 0 if current_mode == "balance" else 1
 
@@ -611,10 +655,14 @@ if st.session_state.get("order_pdf_bytes"):
             horizontal=True,
         )
 
-        payment_calc = payment_choice_to_values(payment_choice, balance_due)
+        parsed_total_amount = float(total_amount or 0)
+        parsed_prepayment = float(prepayment or 0)
+        parsed_balance_due = float(balance_due or 0)
+
+        payment_calc = payment_choice_to_values(payment_choice, parsed_balance_due)
         st.info(
             f"{payment_calc['payment_label']} — "
-            f"Balance due: {format_money(balance_due)} — "
+            f"Balance due: {format_money(parsed_balance_due)} — "
             f"Payment amount: {format_money(payment_calc['payment_amount'])}"
         )
 
@@ -631,9 +679,9 @@ if st.session_state.get("order_pdf_bytes"):
         st.session_state["phone"] = phone
         st.session_state["sales_order"] = sales_order
         st.session_state["order_date"] = order_date
-        st.session_state["total_amount"] = total_amount
-        st.session_state["prepayment"] = prepayment
-        st.session_state["balance_due"] = balance_due
+        st.session_state["total_amount"] = parsed_total_amount
+        st.session_state["prepayment"] = parsed_prepayment
+        st.session_state["balance_due"] = parsed_balance_due
         st.session_state["payment_mode"] = payment_calc["payment_mode"]
         st.session_state["payment_amount"] = payment_calc["payment_amount"]
         st.session_state["payment_label"] = payment_calc["payment_label"]
@@ -647,9 +695,9 @@ if st.session_state.get("order_pdf_bytes"):
             st.session_state["phone"] = phone
             st.session_state["sales_order"] = sales_order
             st.session_state["order_date"] = order_date
-            st.session_state["total_amount"] = total_amount
-            st.session_state["prepayment"] = prepayment
-            st.session_state["balance_due"] = balance_due
+            st.session_state["total_amount"] = parsed_total_amount
+            st.session_state["prepayment"] = parsed_prepayment
+            st.session_state["balance_due"] = parsed_balance_due
             st.session_state["payment_mode"] = payment_calc["payment_mode"]
             st.session_state["payment_amount"] = payment_calc["payment_amount"]
             st.session_state["payment_label"] = payment_calc["payment_label"]
@@ -684,13 +732,14 @@ if st.session_state.get("order_pdf_bytes"):
     if a1.button("Add Files to Bundle"):
         if extra_files:
             if "attachments" not in st.session_state:
-                st.session_state["attachments"] = []
+                initialise_default_attachments()
 
             for up in extra_files:
                 st.session_state["attachments"].append(
                     {
                         "name": up.name,
                         "bytes": up.getvalue(),
+                        "locked": False,
                     }
                 )
 
@@ -737,11 +786,16 @@ if st.session_state.get("order_pdf_bytes"):
         for i, att in enumerate(attachments, start=1):
             r1, r2, r3 = st.columns([1, 6, 1])
             r1.write(i)
-            r2.write(att["name"])
-            if r3.button("Remove", key=f"remove_att_{i}"):
-                attachments.pop(i - 1)
-                st.session_state["attachments"] = attachments
-                st.rerun()
+            locked = att.get("locked", False)
+            suffix = " (default)" if locked else ""
+            r2.write(f"{att['name']}{suffix}")
+            if locked:
+                r3.write("—")
+            else:
+                if r3.button("Remove", key=f"remove_att_{i}"):
+                    attachments.pop(i - 1)
+                    st.session_state["attachments"] = attachments
+                    st.rerun()
     else:
         st.caption("No additional files attached.")
 
