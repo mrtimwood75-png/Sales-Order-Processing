@@ -13,6 +13,7 @@ if str(APP_DIR) not in sys.path:
 from config.settings import SHAREPOINT_INBOX
 from services.db import init_db, list_orders, upsert_order, update_order
 from services.docusign_service import DocusignService
+from services.logo_overlay import add_logo_to_pdf
 from services.pdf_parser import parse_sales_order_pdf
 from services.stripe_service import StripeService
 
