@@ -8,6 +8,7 @@ Internal Streamlit app for two workflows:
 ## Features
 
 - PDF parsing for customer name, email, order number, totals, prepayment, and balance due.
+- BoConcept logo overlay at top-left of every page before order parsing (when `assets/logo.png` exists).
 - Manual review queue with Submit button before DocuSign send.
 - Optional Stripe Checkout Session link generation per order.
 - Excel import for pending final-payment SMS workflow.
@@ -27,7 +28,8 @@ streamlit run app/main.py
 ## Notes
 
 - DocuSign, Stripe, and directSMS calls are implemented as integration-ready service wrappers. Add your live credentials in `.env` before use.
-- If you want logo overlay before DocuSign send, add a PNG logo at `assets/logo.png` and extend `services/logo_overlay.py`.
+- If you want logo overlay before DocuSign send, add a PNG logo at `assets/logo.png`.
+- By default, the app looks for the logo at `assets/logo.png`. You can override this with `BRAND_LOGO_PATH` in `.env`.
 - The app stores uploaded files and the SQLite log in `data/`.
 
 ## Repo upload
