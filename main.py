@@ -17,6 +17,7 @@ except Exception:
 
 APP_TITLE = "BoConcept Ops App"
 BASE_DIR = Path(__file__).resolve().parent
+DEFAULT_FILES_DIR = BASE_DIR / "assets" / "default-files"
 
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "").strip()
 STRIPE_SUCCESS_URL = os.getenv("STRIPE_SUCCESS_URL", "https://example.com/success").strip()
@@ -49,39 +50,33 @@ def resolve_logo_path():
     return None
 
 
-def resolve_default_attachment_path():
-    candidates = [
-        BASE_DIR / "assets" / "01 BCA_Terms_Conditions.pdf",
-        BASE_DIR / "assets" / "01_BCA_Terms_Conditions.pdf",
-        Path("/mnt/data/01 BCA_Terms_Conditions.pdf"),
-    ]
-
-    env_path = os.getenv("DEFAULT_BUNDLE_ATTACHMENT_PATH", "").strip()
-    if env_path:
-        p = Path(env_path)
-        if p.exists():
-            return p
-
-    for p in candidates:
-        if p.exists():
-            return p
-
-    return None
-
-
 LOGO_PATH = resolve_logo_path()
-DEFAULT_ATTACHMENT_PATH = resolve_default_attachment_path()
 
 
-def get_default_attachment():
-    if not DEFAULT_ATTACHMENT_PATH or not DEFAULT_ATTACHMENT_PATH.exists():
-        return None
+def get_default_attachments():
+    attachments = []
 
-    return {
-        "name": DEFAULT_ATTACHMENT_PATH.name,
-        "bytes": DEFAULT_ATTACHMENT_PATH.read_bytes(),
-        "locked": True,
-    }
+    if not DEFAULT_FILES_DIR.exists() or not DEFAULT_FILES_DIR.is_dir():
+        return attachments
+
+    allowed_exts = {".pdf", ".png", ".jpg", ".jpeg", ".webp"}
+
+    for path in sorted(DEFAULT_FILES_DIR.iterdir(), key=lambda p: p.name.lower()):
+        if not path.is_file():
+            continue
+        if path.suffix.lower() not in allowed_exts:
+            continue
+
+        attachments.append(
+            {
+                "name": path.name,
+                "bytes": path.read_bytes(),
+                "locked": True,
+                "source": "default",
+            }
+        )
+
+    return attachments
 
 
 def reset_session():
@@ -111,11 +106,7 @@ def reset_session():
 
 
 def initialise_default_attachments():
-    default_attachment = get_default_attachment()
-    if default_attachment:
-        st.session_state["attachments"] = [default_attachment]
-    else:
-        st.session_state["attachments"] = []
+    st.session_state["attachments"] = get_default_attachments()
 
 
 def clean_text(value):
@@ -400,52 +391,53 @@ def find_balance_anchor_on_last_page(page):
 
 
 def draw_3d_button(page, rect, label, url):
-    base_fill = (0.34, 0.43, 0.46)
-    highlight = (0.45, 0.55, 0.58)
-    shadow = (0.21, 0.28, 0.30)
-    arrow_panel = (0.28, 0.36, 0.39)
-    border = (0.24, 0.31, 0.34)
+    outer_border = (0.22, 0.29, 0.31)
+    main_fill = (0.36, 0.45, 0.48)
+    top_highlight = (0.49, 0.59, 0.62)
+    bottom_shadow = (0.18, 0.24, 0.26)
+    arrow_fill = (0.30, 0.38, 0.41)
 
     shape = page.new_shape()
-    shape.draw_rect(rect)
-    shape.finish(color=border, fill=base_fill, width=1)
+    shape.draw_oval(rect)
+    shape.finish(color=outer_border, fill=main_fill, width=1)
     shape.commit()
 
-    top_band = fitz.Rect(rect.x0, rect.y0, rect.x1, rect.y0 + 3)
+    top_rect = fitz.Rect(rect.x0 + 1, rect.y0 + 1, rect.x1 - 1, rect.y0 + 4)
     shape = page.new_shape()
-    shape.draw_rect(top_band)
-    shape.finish(color=highlight, fill=highlight, width=0)
+    shape.draw_oval(top_rect)
+    shape.finish(color=top_highlight, fill=top_highlight, width=0)
     shape.commit()
 
-    bottom_band = fitz.Rect(rect.x0, rect.y1 - 3, rect.x1, rect.y1)
+    bottom_rect = fitz.Rect(rect.x0 + 1, rect.y1 - 4, rect.x1 - 1, rect.y1 - 1)
     shape = page.new_shape()
-    shape.draw_rect(bottom_band)
-    shape.finish(color=shadow, fill=shadow, width=0)
+    shape.draw_oval(bottom_rect)
+    shape.finish(color=bottom_shadow, fill=bottom_shadow, width=0)
     shape.commit()
 
-    divider_x = rect.x1 - 32
-    divider = fitz.Rect(divider_x, rect.y0, rect.x1, rect.y1)
+    divider_x = rect.x1 - 34
+    arrow_rect = fitz.Rect(divider_x, rect.y0, rect.x1, rect.y1)
+
     shape = page.new_shape()
-    shape.draw_rect(divider)
-    shape.finish(color=arrow_panel, fill=arrow_panel, width=0)
+    shape.draw_oval(arrow_rect)
+    shape.finish(color=arrow_fill, fill=arrow_fill, width=0)
     shape.commit()
 
-    label_rect = fitz.Rect(rect.x0 + 8, rect.y0 + 2, divider_x - 4, rect.y1 - 2)
+    label_rect = fitz.Rect(rect.x0 + 10, rect.y0 + 2, divider_x - 4, rect.y1 - 2)
     page.insert_textbox(
         label_rect,
         label,
-        fontsize=11,
+        fontsize=10.5,
         fontname="helv",
         color=(1, 1, 1),
         align=1,
         overlay=True,
     )
 
-    arrow_rect = fitz.Rect(divider_x, rect.y0 + 1, rect.x1, rect.y1 - 1)
+    arrow_text_rect = fitz.Rect(divider_x, rect.y0 + 1, rect.x1 - 1, rect.y1 - 1)
     page.insert_textbox(
-        arrow_rect,
+        arrow_text_rect,
         "›",
-        fontsize=24,
+        fontsize=22,
         fontname="helv",
         color=(1, 1, 1),
         align=1,
@@ -469,6 +461,7 @@ def stamp_main_pdf_bytes(pdf_bytes: bytes, logo_path, button_label=None, button_
 
     for i, page in enumerate(doc):
         page_width = page.rect.width
+        page_height = page.rect.height
 
         if logo_path and Path(logo_path).exists():
             left_x = get_page_text_left_margin(page)
@@ -483,15 +476,19 @@ def stamp_main_pdf_bytes(pdf_bytes: bytes, logo_path, button_label=None, button_
         if button_label and button_url and i == len(doc) - 1:
             anchor = find_balance_anchor_on_last_page(page)
 
-            button_width = 128
-            button_height = 28
+            button_width = 130
+            button_height = 30
 
             if anchor:
-                btn_x = anchor[0] + 210
-                btn_y = anchor[1] - 22
+                btn_x = anchor[0] + 230
+                btn_y = anchor[1] - 58
             else:
-                btn_x = get_page_text_left_margin(page)
-                btn_y = page.rect.height - 90
+                btn_x = page_width - button_width - 42
+                btn_y = page_height - 150
+
+            signature_guard_top = page_height - 150
+            if btn_y > signature_guard_top - button_height:
+                btn_y = signature_guard_top - button_height - 12
 
             if btn_x + button_width > page_width - 24:
                 btn_x = page_width - 24 - button_width
@@ -574,10 +571,11 @@ if LOGO_PATH:
 else:
     top_a.error("BoConcept logo not found in assets folder")
 
-if DEFAULT_ATTACHMENT_PATH:
-    st.caption(f"Default bundle file locked in: {DEFAULT_ATTACHMENT_PATH.name}")
+default_attachments = get_default_attachments()
+if default_attachments:
+    st.caption(f"Locked default bundle files: {len(default_attachments)}")
 else:
-    st.warning("Default bundle file not found")
+    st.warning("No files found in assets/default-files")
 
 if top_b.button("Reset Session"):
     reset_session()
@@ -620,54 +618,44 @@ if uploaded_pdf is not None:
 
 if st.session_state.get("order_pdf_bytes"):
     st.markdown("### Current Order")
-    st.caption(st.session_state.get("order_pdf_name", ""))
-
-    current_balance_due = float(st.session_state.get("balance_due", 0.0))
-    current_mode = st.session_state.get("payment_mode", "balance")
-    current_calc = payment_choice_to_values(current_mode, current_balance_due)
-    st.session_state["payment_amount"] = current_calc["payment_amount"]
-    st.session_state["payment_label"] = current_calc["payment_label"]
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Total", format_money(st.session_state.get("total_amount")))
-    c2.metric("Prepayment", format_money(st.session_state.get("prepayment")))
-    c3.metric("Balance due", format_money(current_balance_due))
-    c4.metric("Payment amount", format_money(st.session_state.get("payment_amount")))
 
     with st.form("order_form"):
-        customer_name = st.text_input("Customer name", value=st.session_state.get("customer_name", ""))
-        customer_email = st.text_input("Customer email", value=st.session_state.get("customer_email", ""))
-        phone = st.text_input("Phone", value=st.session_state.get("phone", ""))
-        sales_order = st.text_input("Sales order", value=st.session_state.get("sales_order", ""))
-        order_date = st.text_input("Order date", value=st.session_state.get("order_date", ""))
+        col_a, col_b, col_c = st.columns(3)
+        customer_name = col_a.text_input("Customer", value=st.session_state.get("customer_name", ""))
+        customer_email = col_b.text_input("Email", value=st.session_state.get("customer_email", ""))
+        phone = col_c.text_input("Phone", value=st.session_state.get("phone", ""))
 
-        total_amount = st.text_input("Total amount", value=f"{float(st.session_state.get('total_amount', 0.0)):.2f}")
-        prepayment = st.text_input("Prepayment", value=f"{float(st.session_state.get('prepayment', 0.0)):.2f}")
-        balance_due = st.text_input("Balance due", value=f"{float(st.session_state.get('balance_due', 0.0)):.2f}")
-
-        payment_index = 0 if current_mode == "balance" else 1
-
-        payment_choice = st.radio(
-            "Payment link type",
+        col_d, col_e, col_f = st.columns(3)
+        sales_order = col_d.text_input("Sales order", value=st.session_state.get("sales_order", ""))
+        order_date = col_e.text_input("Order date", value=st.session_state.get("order_date", ""))
+        payment_choice = col_f.radio(
+            "Payment type",
             options=["balance", "deposit"],
-            index=payment_index,
-            format_func=lambda x: "Balance" if x == "balance" else "Deposit (50% of balance)",
+            index=0 if st.session_state.get("payment_mode", "balance") == "balance" else 1,
+            format_func=lambda x: "Balance" if x == "balance" else "Deposit 50%",
             horizontal=True,
         )
+
+        col_g, col_h, col_i, col_j = st.columns(4)
+        total_amount = col_g.text_input("Total", value=f"{float(st.session_state.get('total_amount', 0.0)):.2f}")
+        prepayment = col_h.text_input("Prepayment", value=f"{float(st.session_state.get('prepayment', 0.0)):.2f}")
+        balance_due = col_i.text_input("Balance due", value=f"{float(st.session_state.get('balance_due', 0.0)):.2f}")
 
         parsed_total_amount = float(total_amount or 0)
         parsed_prepayment = float(prepayment or 0)
         parsed_balance_due = float(balance_due or 0)
-
         payment_calc = payment_choice_to_values(payment_choice, parsed_balance_due)
-        st.info(
-            f"{payment_calc['payment_label']} — "
-            f"Balance due: {format_money(parsed_balance_due)} — "
+
+        col_j.metric("Payment amount", format_money(payment_calc["payment_amount"]))
+
+        st.caption(
+            f"{payment_calc['payment_label']}  |  "
+            f"Balance due: {format_money(parsed_balance_due)}  |  "
             f"Payment amount: {format_money(payment_calc['payment_amount'])}"
         )
 
-        st.text_input("Payment link", value=st.session_state.get("payment_link", ""), disabled=True)
-        st.text_input("Stripe session ID", value=st.session_state.get("stripe_session_id", ""), disabled=True)
+        if st.session_state.get("payment_link"):
+            st.text_input("Payment link", value=st.session_state.get("payment_link", ""), disabled=True)
 
         b1, b2 = st.columns(2)
         save_clicked = b1.form_submit_button("Apply Changes")
@@ -719,7 +707,7 @@ if st.session_state.get("order_pdf_bytes"):
         except Exception as e:
             st.error(str(e))
 
-    st.markdown("### Additional Files to Stitch Into Final PDF")
+    st.markdown("### Additional Files")
     extra_files = st.file_uploader(
         "Upload extra PDF or image files",
         type=["pdf", "png", "jpg", "jpeg", "webp"],
@@ -740,6 +728,7 @@ if st.session_state.get("order_pdf_bytes"):
                         "name": up.name,
                         "bytes": up.getvalue(),
                         "locked": False,
+                        "source": "user",
                     }
                 )
 
@@ -784,24 +773,17 @@ if st.session_state.get("order_pdf_bytes"):
     if attachments:
         st.caption("Bundle order:")
         for i, att in enumerate(attachments, start=1):
-            r1, r2, r3 = st.columns([1, 6, 1])
+            r1, r2, r3 = st.columns([1, 7, 1])
             r1.write(i)
-            locked = att.get("locked", False)
-            suffix = " (default)" if locked else ""
+            suffix = " (default)" if att.get("locked") else ""
             r2.write(f"{att['name']}{suffix}")
-            if locked:
+            if att.get("locked"):
                 r3.write("—")
             else:
                 if r3.button("Remove", key=f"remove_att_{i}"):
                     attachments.pop(i - 1)
                     st.session_state["attachments"] = attachments
                     st.rerun()
-    else:
-        st.caption("No additional files attached.")
-
-    if st.session_state.get("payment_link"):
-        st.markdown("### Stored Payment Link")
-        st.code(st.session_state["payment_link"])
 
     if st.session_state.get("bundle_pdf_bytes"):
         st.download_button(
