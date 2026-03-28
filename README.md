@@ -22,7 +22,7 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
-streamlit run main.py
+python -m streamlit run main.py
 ```
 
 If startup feels slow, try:
@@ -31,12 +31,19 @@ If startup feels slow, try:
 streamlit run main.py --server.fileWatcherType none
 ```
 
+Compatibility launcher (same app, useful if older instructions reference it):
+
+```bash
+python -m streamlit run app/main.py
+```
+
 ## Notes
 
 - DocuSign, Stripe, and directSMS calls are implemented as integration-ready service wrappers. Add your live credentials in `.env` before use.
 - If you want logo overlay before DocuSign send, add a PNG logo at `assets/logo.png`.
 - By default, the app looks for the logo at `assets/logo.png`. You can override this with `BRAND_LOGO_PATH` in `.env`.
 - The app stores uploaded files and the SQLite log in `data/`.
+- `runtime.txt` pins Python to 3.11 for Streamlit Community Cloud compatibility with current dependencies.
 
 ## Repo upload
 
