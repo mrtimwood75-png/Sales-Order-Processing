@@ -3,6 +3,7 @@ import sqlite3
 from pathlib import Path
 from datetime import datetime
 import os
+import shutil
 
 import pandas as pd
 import streamlit as st
@@ -24,19 +25,19 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 INCOMING_DIR = DATA_DIR / "incoming"
 STAMPED_DIR = DATA_DIR / "stamped"
+ATTACHMENTS_DIR = DATA_DIR / "attachments"
 DB_PATH = DATA_DIR / "ops_app.db"
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 INCOMING_DIR.mkdir(parents=True, exist_ok=True)
 STAMPED_DIR.mkdir(parents=True, exist_ok=True)
+ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)
 
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "").strip()
 STRIPE_SUCCESS_URL = os.getenv("STRIPE_SUCCESS_URL", "https://example.com/success").strip()
 STRIPE_CANCEL_URL = os.getenv("STRIPE_CANCEL_URL", "https://example.com/cancel").strip()
 STRIPE_CURRENCY = os.getenv("STRIPE_CURRENCY", "aud").strip().lower()
 
-# Put your BoConcept logo file here, or override with env var.
-# Recommended: ./assets/boconcept_logo.png
 LOGO_PATH = Path(os.getenv("BOCONCEPT_LOGO_PATH", str(BASE_DIR / "assets" / "boconcept_logo.png")))
 
 
@@ -91,6 +92,19 @@ def init_db():
         for col, col_type in required_additions.items():
             if col not in existing_cols:
                 conn.execute(f"ALTER TABLE orders ADD COLUMN {col} {col_type}")
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS order_attachments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_file TEXT,
+                attachment_path TEXT,
+                original_name TEXT,
+                sort_order INTEGER DEFAULT 0,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
 
         conn.execute(
             """
@@ -168,6 +182,48 @@ def update_order(source_file: str, **fields):
         conn.execute(sql, params)
 
 
+def add_attachment(source_file: str, attachment_path: str, original_name: str):
+    with get_conn() as conn:
+        max_row = conn.execute(
+            "SELECT COALESCE(MAX(sort_order), 0) AS max_sort FROM order_attachments WHERE source_file = ?",
+            (source_file,),
+        ).fetchone()
+        next_sort = int(max_row["max_sort"] or 0) + 1
+        conn.execute(
+            """
+            INSERT INTO order_attachments (source_file, attachment_path, original_name, sort_order)
+            VALUES (?, ?, ?, ?)
+            """,
+            (source_file, attachment_path, original_name, next_sort),
+        )
+
+
+def get_attachments(source_file: str):
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM order_attachments
+            WHERE source_file = ?
+            ORDER BY sort_order, id
+            """,
+            (source_file,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def delete_attachment(attachment_id: int):
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT attachment_path FROM order_attachments WHERE id = ?",
+            (attachment_id,),
+        ).fetchone()
+        if row:
+            path = Path(row["attachment_path"])
+            if path.exists():
+                path.unlink()
+        conn.execute("DELETE FROM order_attachments WHERE id = ?", (attachment_id,))
+
+
 def insert_sms_job(job: dict):
     cols = [
         "customer_name",
@@ -224,9 +280,6 @@ def parse_money(text):
     if not text:
         return None
 
-    # Danish format:
-    # 71.245,00 -> 71245.00
-    # 6.374,99 -> 6374.99
     if "," in text:
         text = text.replace(".", "")
         text = text.replace(",", ".")
@@ -326,6 +379,7 @@ def parse_sales_order_pdf(pdf_path: Path):
         doc = fitz.open(pdf_path)
         text = "\n".join(page.get_text("text") for page in doc)
         first_page = doc[0].get_text("text") if doc.page_count else ""
+        doc.close()
     except Exception:
         return default_result
 
@@ -468,15 +522,12 @@ def add_logo_and_payment_button_to_pdf(source_pdf_path, output_pdf_path, logo_pa
 
     for page in doc:
         page_width = page.rect.width
-        page_height = page.rect.height
 
-        # Logo top-left on every page
         if logo_path and logo_path.exists():
             logo_rect = fitz.Rect(24, 18, 144, 58)
             page.insert_image(logo_rect, filename=str(logo_path), keep_proportion=True, overlay=True)
 
-        # Button top-right on every page
-        button_width = 160
+        button_width = 170
         button_height = 28
         x1 = page_width - 24 - button_width
         y1 = 20
@@ -507,6 +558,58 @@ def add_logo_and_payment_button_to_pdf(source_pdf_path, output_pdf_path, logo_pa
 
     doc.save(output_pdf_path, garbage=4, deflate=True)
     doc.close()
+
+
+def append_file_to_pdf(bundle_doc, attachment_path: Path):
+    ext = attachment_path.suffix.lower()
+
+    if ext == ".pdf":
+        src = fitz.open(attachment_path)
+        bundle_doc.insert_pdf(src)
+        src.close()
+        return
+
+    if ext in [".png", ".jpg", ".jpeg", ".webp"]:
+        img_doc = fitz.open(attachment_path)
+        pdf_bytes = img_doc.convert_to_pdf()
+        img_doc.close()
+
+        img_pdf = fitz.open("pdf", pdf_bytes)
+        bundle_doc.insert_pdf(img_pdf)
+        img_pdf.close()
+        return
+
+    raise RuntimeError(f"Unsupported attachment type: {attachment_path.name}")
+
+
+def build_final_bundle_pdf(source_pdf_path, output_pdf_path, logo_path, button_label, button_url, attachments):
+    if fitz is None:
+        raise RuntimeError("PyMuPDF not installed. Add 'pymupdf' to requirements.txt")
+
+    temp_main_pdf = output_pdf_path.with_name(output_pdf_path.stem + "_main.pdf")
+    add_logo_and_payment_button_to_pdf(
+        source_pdf_path=source_pdf_path,
+        output_pdf_path=temp_main_pdf,
+        logo_path=logo_path,
+        button_label=button_label,
+        button_url=button_url,
+    )
+
+    bundle = fitz.open()
+    main_doc = fitz.open(temp_main_pdf)
+    bundle.insert_pdf(main_doc)
+    main_doc.close()
+
+    for att in attachments:
+        att_path = Path(att["attachment_path"])
+        if att_path.exists():
+            append_file_to_pdf(bundle, att_path)
+
+    bundle.save(output_pdf_path, garbage=4, deflate=True)
+    bundle.close()
+
+    if temp_main_pdf.exists():
+        temp_main_pdf.unlink()
 
 
 init_db()
@@ -543,6 +646,7 @@ with tab1:
             "Select order",
             order_options,
             key="selected_order_file",
+            format_func=lambda x: Path(x).name,
         )
 
         current = get_order_by_source_file(selected_file)
@@ -597,13 +701,47 @@ with tab1:
 
             payment_link = st.text_input("Payment link", value=current.get("payment_link") or "", disabled=True)
             stripe_session_id = st.text_input("Stripe session ID", value=current.get("stripe_session_id") or "", disabled=True)
-            stamped_pdf_path = st.text_input("Stamped PDF", value=current.get("stamped_pdf_path") or "", disabled=True)
+            stamped_pdf_path = st.text_input("Bundle PDF", value=current.get("stamped_pdf_path") or "", disabled=True)
             status = st.text_input("Status", value=current.get("status") or "")
 
             col_save, col_link, col_submit = st.columns(3)
             save_clicked = col_save.form_submit_button("Save Changes")
-            create_link_clicked = col_link.form_submit_button("Create Stripe Payment Link")
+            create_link_clicked = col_link.form_submit_button("Create Stripe Payment Link + Bundle PDF")
             submit_clicked = col_submit.form_submit_button("Mark Submitted")
+
+        st.markdown("### Additional Files to Stitch Into Final PDF")
+        extra_files = st.file_uploader(
+            "Upload extra PDF or image files",
+            type=["pdf", "png", "jpg", "jpeg", "webp"],
+            accept_multiple_files=True,
+            key=f"attachments_{selected_file}",
+        )
+
+        if extra_files:
+            order_attach_dir = ATTACHMENTS_DIR / Path(selected_file).stem
+            order_attach_dir.mkdir(parents=True, exist_ok=True)
+
+            saved_count = 0
+            for up in extra_files:
+                dest = order_attach_dir / up.name
+                with open(dest, "wb") as f:
+                    f.write(up.getbuffer())
+                add_attachment(selected_file, str(dest), up.name)
+                saved_count += 1
+
+            st.success(f"Added {saved_count} attachment file(s)")
+            st.rerun()
+
+        attachments = get_attachments(selected_file)
+        if attachments:
+            for att in attachments:
+                c1, c2 = st.columns([5, 1])
+                c1.write(att["original_name"])
+                if c2.button("Remove", key=f"remove_att_{att['id']}"):
+                    delete_attachment(att["id"])
+                    st.rerun()
+        else:
+            st.caption("No additional files attached.")
 
         if save_clicked:
             update_order(
@@ -651,15 +789,18 @@ with tab1:
                 )
 
                 safe_order = re.sub(r"[^A-Za-z0-9_-]+", "_", sales_order or Path(selected_file).stem)
-                stamped_name = f"{safe_order}_{payment_calc['payment_mode']}_payment.pdf"
-                stamped_path = STAMPED_DIR / stamped_name
+                bundle_name = f"{safe_order}_{payment_calc['payment_mode']}_bundle.pdf"
+                bundle_path = STAMPED_DIR / bundle_name
 
-                add_logo_and_payment_button_to_pdf(
+                current_attachments = get_attachments(selected_file)
+
+                build_final_bundle_pdf(
                     source_pdf_path=selected_file,
-                    output_pdf_path=stamped_path,
+                    output_pdf_path=bundle_path,
                     logo_path=LOGO_PATH,
                     button_label=payment_calc["payment_label"],
                     button_url=link_result["url"],
+                    attachments=current_attachments,
                 )
 
                 update_order(
@@ -669,10 +810,10 @@ with tab1:
                     payment_label=payment_calc["payment_label"],
                     payment_link=link_result["url"],
                     stripe_session_id=link_result["session_id"],
-                    stamped_pdf_path=str(stamped_path),
+                    stamped_pdf_path=str(bundle_path),
                     status="Payment Link Created",
                 )
-                st.success("Stripe payment link created and PDF stamped")
+                st.success("Stripe payment link created and bundled PDF generated")
                 st.code(link_result["url"])
                 st.rerun()
             except Exception as e:
@@ -705,14 +846,15 @@ with tab1:
             st.code(refreshed["payment_link"])
 
         if refreshed.get("stamped_pdf_path"):
-            stamped_file = Path(refreshed["stamped_pdf_path"])
-            if stamped_file.exists():
-                with open(stamped_file, "rb") as f:
+            bundle_file = Path(refreshed["stamped_pdf_path"])
+            if bundle_file.exists():
+                with open(bundle_file, "rb") as f:
                     st.download_button(
-                        "Download stamped PDF",
+                        "Download bundled PDF",
                         data=f.read(),
-                        file_name=stamped_file.name,
+                        file_name=bundle_file.name,
                         mime="application/pdf",
+                        key=f"download_bundle_{bundle_file.name}",
                     )
     else:
         st.info("No orders loaded.")
