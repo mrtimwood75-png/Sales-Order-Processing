@@ -19,13 +19,22 @@ APP_TITLE = "BoConcept Ops App"
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_FILES_DIR = BASE_DIR / "assets" / "default-files"
 
-STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "").strip()
-STRIPE_SUCCESS_URL = os.getenv("STRIPE_SUCCESS_URL", "https://example.com/success").strip()
-STRIPE_CANCEL_URL = os.getenv("STRIPE_CANCEL_URL", "https://example.com/cancel").strip()
-STRIPE_CURRENCY = os.getenv("STRIPE_CURRENCY", "aud").strip().lower()
-STRIPE_TEST_FALLBACK_URL = os.getenv(
+STRIPE_SECRET_KEY = st.secrets.get("STRIPE_SECRET_KEY", os.getenv("STRIPE_SECRET_KEY", "")).strip()
+STRIPE_SUCCESS_URL = st.secrets.get(
+    "STRIPE_SUCCESS_URL",
+    os.getenv("STRIPE_SUCCESS_URL", "https://example.com/success"),
+).strip()
+STRIPE_CANCEL_URL = st.secrets.get(
+    "STRIPE_CANCEL_URL",
+    os.getenv("STRIPE_CANCEL_URL", "https://example.com/cancel"),
+).strip()
+STRIPE_CURRENCY = st.secrets.get(
+    "STRIPE_CURRENCY",
+    os.getenv("STRIPE_CURRENCY", "aud"),
+).strip().lower()
+STRIPE_TEST_FALLBACK_URL = st.secrets.get(
     "STRIPE_TEST_FALLBACK_URL",
-    "https://buy.stripe.com/test_14A5kC7WQ3KQ4qQeUU",
+    os.getenv("STRIPE_TEST_FALLBACK_URL", "https://buy.stripe.com/test_14A5kC7WQ3KQ4qQeUU"),
 ).strip()
 
 
@@ -146,6 +155,13 @@ def format_money(value):
     if value is None:
         return "-"
     return f"{value:,.2f}"
+
+
+def parse_numeric_input(text, fallback=0.0):
+    try:
+        return float(str(text).replace(",", "").strip() or 0)
+    except Exception:
+        return float(fallback)
 
 
 def find_value(pattern, text, group=1):
@@ -286,7 +302,7 @@ def ensure_stripe_ready():
     if stripe is None:
         raise RuntimeError("Stripe package not installed")
     if not STRIPE_SECRET_KEY:
-        raise RuntimeError("Missing STRIPE_SECRET_KEY environment variable")
+        raise RuntimeError("Missing STRIPE_SECRET_KEY in Streamlit secrets")
     stripe.api_key = STRIPE_SECRET_KEY
 
 
@@ -641,9 +657,9 @@ if st.session_state.get("order_pdf_bytes"):
         prepayment = col_h.text_input("Prepayment", value=f"{float(st.session_state.get('prepayment', 0.0)):.2f}")
         balance_due = col_i.text_input("Balance due", value=f"{float(st.session_state.get('balance_due', 0.0)):.2f}")
 
-        parsed_total_amount = float(total_amount or 0)
-        parsed_prepayment = float(prepayment or 0)
-        parsed_balance_due = float(balance_due or 0)
+        parsed_total_amount = parse_numeric_input(total_amount, st.session_state.get("total_amount", 0.0))
+        parsed_prepayment = parse_numeric_input(prepayment, st.session_state.get("prepayment", 0.0))
+        parsed_balance_due = parse_numeric_input(balance_due, st.session_state.get("balance_due", 0.0))
         payment_calc = payment_choice_to_values(payment_choice, parsed_balance_due)
 
         col_j.metric("Payment amount", format_money(payment_calc["payment_amount"]))
