@@ -338,20 +338,88 @@ def find_balance_anchor_on_last_page(page):
     if not words:
         return None
 
-    # words format: x0, y0, x1, y1, word, block_no, line_no, word_no
-    balance_words = []
+    lines = {}
     for w in words:
-        text = str(w[4]).strip().lower()
-        if text in {"balance", "due", "final", "balance due"}:
-            balance_words.append(w)
+        x0, y0, x1, y1, text, block_no, line_no, word_no = w
+        key = (block_no, line_no)
+        lines.setdefault(key, []).append((x0, y0, x1, y1, str(text)))
 
-    if not balance_words:
-        return None
+    best = None
 
-    target = max(balance_words, key=lambda w: (w[3], w[1]))
-    x0, y0, x1, y1 = float(target[0]), float(target[1]), float(target[2]), float(target[3])
+    for items in lines.values():
+        items = sorted(items, key=lambda t: t[0])
+        joined = " ".join(t[4] for t in items).strip().lower()
 
-    return x0, y1
+        if "balance due" in joined:
+            min_x = min(t[0] for t in items)
+            max_y = max(t[3] for t in items)
+            if best is None or max_y > best[1]:
+                best = (min_x, max_y)
+
+    return best
+
+
+def draw_3d_button(page, rect, label, url):
+    base_fill = (0.33, 0.42, 0.45)
+    highlight = (0.43, 0.52, 0.56)
+    shadow = (0.20, 0.26, 0.29)
+    arrow_panel = (0.26, 0.34, 0.37)
+    border = (0.24, 0.31, 0.34)
+
+    shape = page.new_shape()
+    shape.draw_rect(rect)
+    shape.finish(color=border, fill=base_fill, width=1)
+    shape.commit()
+
+    top_band = fitz.Rect(rect.x0, rect.y0, rect.x1, rect.y0 + 3)
+    shape = page.new_shape()
+    shape.draw_rect(top_band)
+    shape.finish(color=highlight, fill=highlight, width=0)
+    shape.commit()
+
+    bottom_band = fitz.Rect(rect.x0, rect.y1 - 3, rect.x1, rect.y1)
+    shape = page.new_shape()
+    shape.draw_rect(bottom_band)
+    shape.finish(color=shadow, fill=shadow, width=0)
+    shape.commit()
+
+    divider_x = rect.x1 - 32
+    divider = fitz.Rect(divider_x, rect.y0, rect.x1, rect.y1)
+    shape = page.new_shape()
+    shape.draw_rect(divider)
+    shape.finish(color=arrow_panel, fill=arrow_panel, width=0)
+    shape.commit()
+
+    label_rect = fitz.Rect(rect.x0 + 8, rect.y0 + 2, divider_x - 4, rect.y1 - 2)
+    page.insert_textbox(
+        label_rect,
+        label,
+        fontsize=11,
+        fontname="helv",
+        color=(1, 1, 1),
+        align=1,
+        overlay=True,
+    )
+
+    arrow = "›"
+    arrow_rect = fitz.Rect(divider_x, rect.y0 + 1, rect.x1, rect.y1 - 1)
+    page.insert_textbox(
+        arrow_rect,
+        arrow,
+        fontsize=24,
+        fontname="helv",
+        color=(1, 1, 1),
+        align=1,
+        overlay=True,
+    )
+
+    page.insert_link(
+        {
+            "kind": fitz.LINK_URI,
+            "from": rect,
+            "uri": url,
+        }
+    )
 
 
 def stamp_main_pdf_bytes(pdf_bytes: bytes, logo_path, button_label=None, button_url=None):
@@ -376,43 +444,27 @@ def stamp_main_pdf_bytes(pdf_bytes: bytes, logo_path, button_label=None, button_
         if button_label and button_url and i == len(doc) - 1:
             anchor = find_balance_anchor_on_last_page(page)
 
+            button_width = 128
+            button_height = 28
+
             if anchor:
-                btn_x = anchor[0]
-                btn_y = anchor[1] + 10
+                btn_x = anchor[0] + 210
+                btn_y = anchor[1] - 22
             else:
                 btn_x = get_page_text_left_margin(page)
                 btn_y = page.rect.height - 90
 
-            button_width = 180
-            button_height = 30
-
             if btn_x + button_width > page_width - 24:
                 btn_x = page_width - 24 - button_width
 
+            if btn_x < 24:
+                btn_x = 24
+
+            if btn_y < 24:
+                btn_y = 24
+
             button_rect = fitz.Rect(btn_x, btn_y, btn_x + button_width, btn_y + button_height)
-
-            shape = page.new_shape()
-            shape.draw_rect(button_rect)
-            shape.finish(color=(0, 0, 0), fill=(0, 0, 0), width=1)
-            shape.commit()
-
-            page.insert_textbox(
-                button_rect,
-                button_label,
-                fontsize=10,
-                fontname="helv",
-                color=(1, 1, 1),
-                align=1,
-                overlay=True,
-            )
-
-            page.insert_link(
-                {
-                    "kind": fitz.LINK_URI,
-                    "from": button_rect,
-                    "uri": button_url,
-                }
-            )
+            draw_3d_button(page, button_rect, "PAY NOW", button_url)
 
     output = doc.tobytes(garbage=4, deflate=True)
     doc.close()
@@ -516,18 +568,26 @@ if uploaded_pdf is not None:
         st.session_state["total_amount"] = parsed["total_amount"]
         st.session_state["prepayment"] = parsed["prepayment"]
         st.session_state["balance_due"] = parsed["balance_due"]
-        st.session_state["payment_mode"] = parsed["payment_mode"]
-        st.session_state["payment_amount"] = parsed["payment_amount"]
-        st.session_state["payment_label"] = parsed["payment_label"]
+
+        calc = payment_choice_to_values("balance", parsed["balance_due"])
+        st.session_state["payment_mode"] = calc["payment_mode"]
+        st.session_state["payment_amount"] = calc["payment_amount"]
+        st.session_state["payment_label"] = calc["payment_label"]
 
 if st.session_state.get("order_pdf_bytes"):
     st.markdown("### Current Order")
     st.caption(st.session_state.get("order_pdf_name", ""))
 
+    current_balance_due = float(st.session_state.get("balance_due", 0.0))
+    current_mode = st.session_state.get("payment_mode", "balance")
+    current_calc = payment_choice_to_values(current_mode, current_balance_due)
+    st.session_state["payment_amount"] = current_calc["payment_amount"]
+    st.session_state["payment_label"] = current_calc["payment_label"]
+
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Total", format_money(st.session_state.get("total_amount")))
     c2.metric("Prepayment", format_money(st.session_state.get("prepayment")))
-    c3.metric("Balance due", format_money(st.session_state.get("balance_due")))
+    c3.metric("Balance due", format_money(current_balance_due))
     c4.metric("Payment amount", format_money(st.session_state.get("payment_amount")))
 
     with st.form("order_form"):
@@ -541,7 +601,6 @@ if st.session_state.get("order_pdf_bytes"):
         prepayment = st.number_input("Prepayment", min_value=0.0, value=float(st.session_state.get("prepayment", 0.0)), step=0.01)
         balance_due = st.number_input("Balance due", min_value=0.0, value=float(st.session_state.get("balance_due", 0.0)), step=0.01)
 
-        current_mode = st.session_state.get("payment_mode", "balance")
         payment_index = 0 if current_mode == "balance" else 1
 
         payment_choice = st.radio(
@@ -579,6 +638,7 @@ if st.session_state.get("order_pdf_bytes"):
         st.session_state["payment_amount"] = payment_calc["payment_amount"]
         st.session_state["payment_label"] = payment_calc["payment_label"]
         st.success("Changes applied to current session")
+        st.rerun()
 
     if create_link_clicked:
         try:
@@ -607,6 +667,7 @@ if st.session_state.get("order_pdf_bytes"):
 
             st.success("Stripe payment link created")
             st.code(link_result["url"])
+            st.rerun()
         except Exception as e:
             st.error(str(e))
 
@@ -634,6 +695,7 @@ if st.session_state.get("order_pdf_bytes"):
                 )
 
             st.success(f"Added {len(extra_files)} attachment file(s)")
+            st.rerun()
         else:
             st.warning("Choose files first")
 
@@ -666,6 +728,7 @@ if st.session_state.get("order_pdf_bytes"):
             st.session_state["bundle_pdf_name"] = bundle_name
 
             st.success("Single bundled PDF created")
+            st.rerun()
         except Exception as e:
             st.error(f"Bundle build failed: {e}")
 
