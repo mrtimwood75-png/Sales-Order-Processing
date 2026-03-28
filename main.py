@@ -645,6 +645,20 @@ with tab1:
         upsert_order(order)
         st.session_state["current_order_file"] = str(save_path)
         st.success(f"Loaded {uploaded_pdf.name}")
+        st.rerun()
+
+    if "current_order_file" in st.session_state:
+        current = get_order_by_source_file(st.session_state["current_order_file"])
+        if current is None:
+            latest = get_latest_order()
+            if latest:
+                st.session_state["current_order_file"] = latest["source_file"]
+                current = latest
+    else:
+        latest = get_latest_order()
+        current = latest
+        if latest:
+            st.session_state["current_order_file"] = latest["source_file"]
 
     if current:
         selected_file = current["source_file"]
