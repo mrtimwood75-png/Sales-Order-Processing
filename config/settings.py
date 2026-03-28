@@ -26,6 +26,7 @@ STRIPE_CANCEL_URL = os.getenv('STRIPE_CANCEL_URL', 'https://example.com/cancel')
 DIRECTSMS_API_KEY = os.getenv('DIRECTSMS_API_KEY', '')
 DIRECTSMS_API_SECRET = os.getenv('DIRECTSMS_API_SECRET', '')
 DIRECTSMS_SENDER = os.getenv('DIRECTSMS_SENDER', 'BoConcept')
+BRAND_LOGO_PATH = Path(os.getenv('BRAND_LOGO_PATH', BASE_DIR / 'assets' / 'logo.png')).resolve()
 
 for path in [DATA_DIR, SHAREPOINT_INBOX, DB_PATH.parent]:
     path.mkdir(parents=True, exist_ok=True)
