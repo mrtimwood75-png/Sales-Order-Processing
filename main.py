@@ -62,7 +62,7 @@ st.markdown(
 )
 
 if LOGO_PATH:
-    st.image(str(LOGO_PATH), width=420)
+    st.image(str(LOGO_PATH), use_container_width=False, width=420)
 
 st.title(APP_TITLE)
 st.write("Choose an app below.")
@@ -74,7 +74,7 @@ with col1:
         """
         <div class="app-card">
             <div class="app-title">Add Stripe Payment Link</div>
-            <div class="app-text">Upload a sales order PDF, create a Stripe checkout link, apply a payment button to the PDF, send the link by SMS, and bundle attachments into one PDF.</div>
+            <div class="app-text">Upload a sales order PDF, create a Stripe checkout link, apply a payment button to the PDF, send the link by SMS, and build a bundled PDF.</div>
         </div>
         """,
         unsafe_allow_html=True,
