@@ -583,8 +583,21 @@ def build_single_bundle_pdf_bytes(main_pdf_bytes: bytes, attachments, logo_path,
     return output
 
 
+def safe_filename(value: str, fallback: str = "customer"):
+    cleaned = re.sub(r"[^A-Za-z0-9_-]+", "_", (value or "").strip())
+    cleaned = cleaned.strip("_")
+    return cleaned or fallback
+
+
 st.set_page_config(page_title=APP_TITLE, layout="wide")
-st.title(APP_TITLE)
+
+top_left, top_right = st.columns([5, 1])
+with top_left:
+    st.title(APP_TITLE)
+with top_right:
+    st.write("")
+    if st.button("Home", use_container_width=True):
+        st.switch_page("main.py")
 
 top_a, top_b = st.columns([3, 1])
 if LOGO_PATH:
@@ -779,12 +792,8 @@ if st.session_state.get("order_pdf_bytes"):
 
     if a2.button("Build Bundle PDF"):
         try:
-            safe_order = re.sub(
-                r"[^A-Za-z0-9_-]+",
-                "_",
-                st.session_state.get("sales_order") or Path(st.session_state.get("order_pdf_name", "order")).stem,
-            )
-            bundle_name = f"{safe_order}_bundle.pdf"
+            customer_file_part = safe_filename(st.session_state.get("customer_name", ""), "customer")
+            bundle_name = f"{customer_file_part}.pdf"
 
             button_label = None
             button_url = None
@@ -827,7 +836,7 @@ if st.session_state.get("order_pdf_bytes"):
         st.download_button(
             "Download bundled PDF",
             data=st.session_state["bundle_pdf_bytes"],
-            file_name=st.session_state.get("bundle_pdf_name", "bundle.pdf"),
+            file_name=st.session_state.get("bundle_pdf_name", "customer.pdf"),
             mime="application/pdf",
         )
 else:
