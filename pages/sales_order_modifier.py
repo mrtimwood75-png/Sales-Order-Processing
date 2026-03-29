@@ -17,7 +17,8 @@ except Exception:
 
 APP_TITLE = "BoConcept Ops App"
 BASE_DIR = Path(__file__).resolve().parent
-DEFAULT_FILES_DIR = BASE_DIR / "assets" / "default-files"
+PROJECT_ROOT = BASE_DIR.parent
+DEFAULT_FILES_DIR = PROJECT_ROOT / "assets" / "default-files"
 
 STRIPE_SECRET_KEY = st.secrets.get("STRIPE_SECRET_KEY", os.getenv("STRIPE_SECRET_KEY", "")).strip()
 STRIPE_SUCCESS_URL = st.secrets.get(
@@ -40,6 +41,10 @@ STRIPE_TEST_FALLBACK_URL = st.secrets.get(
 
 def resolve_logo_path():
     candidates = [
+        PROJECT_ROOT / "assets" / "boconcept_logo.png",
+        PROJECT_ROOT / "assets" / "boconcept_logo.PNG",
+        PROJECT_ROOT / "assets" / "BoConcept_logo.png",
+        PROJECT_ROOT / "assets" / "BoConcept_logo.PNG",
         BASE_DIR / "assets" / "boconcept_logo.png",
         BASE_DIR / "assets" / "boconcept_logo.PNG",
         BASE_DIR / "assets" / "BoConcept_logo.png",
