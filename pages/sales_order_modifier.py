@@ -1,7 +1,12 @@
+import base64
+import json
 import os
 import re
+import time
+import uuid
 from pathlib import Path
 
+import pandas as pd
 import requests
 import streamlit as st
 
@@ -15,6 +20,11 @@ try:
 except Exception:
     stripe = None
 
+try:
+    import jwt
+except Exception:
+    jwt = None
+
 
 APP_TITLE = "Add Stripe Payment Link"
 BASE_DIR = Path(__file__).resolve().parent
@@ -25,6 +35,16 @@ STRIPE_SECRET_KEY = st.secrets.get("STRIPE_SECRET_KEY", os.getenv("STRIPE_SECRET
 STRIPE_SUCCESS_URL = st.secrets.get("STRIPE_SUCCESS_URL", os.getenv("STRIPE_SUCCESS_URL", "")).strip()
 STRIPE_CANCEL_URL = st.secrets.get("STRIPE_CANCEL_URL", os.getenv("STRIPE_CANCEL_URL", "")).strip()
 STRIPE_CURRENCY = st.secrets.get("STRIPE_CURRENCY", os.getenv("STRIPE_CURRENCY", "aud")).strip().lower()
+
+DOCUSIGN_INTEGRATION_KEY = st.secrets.get("DOCUSIGN_INTEGRATION_KEY", os.getenv("DOCUSIGN_INTEGRATION_KEY", "")).strip()
+DOCUSIGN_USER_ID = st.secrets.get("DOCUSIGN_USER_ID", os.getenv("DOCUSIGN_USER_ID", "")).strip()
+DOCUSIGN_ACCOUNT_ID = st.secrets.get("DOCUSIGN_ACCOUNT_ID", os.getenv("DOCUSIGN_ACCOUNT_ID", "")).strip()
+DOCUSIGN_PRIVATE_KEY = st.secrets.get("DOCUSIGN_PRIVATE_KEY", os.getenv("DOCUSIGN_PRIVATE_KEY", "")).strip()
+DOCUSIGN_AUTH_SERVER = st.secrets.get("DOCUSIGN_AUTH_SERVER", os.getenv("DOCUSIGN_AUTH_SERVER", "account-d.docusign.com")).strip()
+DOCUSIGN_BASE_URI = st.secrets.get("DOCUSIGN_BASE_URI", os.getenv("DOCUSIGN_BASE_URI", "")).strip()
+DOCUSIGN_SIGN_X_POSITION = st.secrets.get("DOCUSIGN_SIGN_X_POSITION", os.getenv("DOCUSIGN_SIGN_X_POSITION", "360")).strip()
+DOCUSIGN_SIGN_Y_POSITION = st.secrets.get("DOCUSIGN_SIGN_Y_POSITION", os.getenv("DOCUSIGN_SIGN_Y_POSITION", "650")).strip()
+DOCUSIGN_SIGN_PAGE = st.secrets.get("DOCUSIGN_SIGN_PAGE", os.getenv("DOCUSIGN_SIGN_PAGE", "last")).strip().lower()
 
 
 def resolve_logo_path():
@@ -213,6 +233,16 @@ def reset_session():
         "sms_confirm_open",
         "sms_confirm_name",
         "sms_confirm_phone",
+        "operator_selected_label",
+        "operator_selected_email",
+        "operator_selected_name",
+        "operator_selected_phone",
+        "docusign_status",
+        "docusign_envelope_id",
+        "docusign_confirm_open",
+        "docusign_confirm_name",
+        "docusign_confirm_email",
+        "docusign_confirm_operator",
         "so_diag",
     ]
     for k in keys:
@@ -675,6 +705,250 @@ def init_template_state():
         st.session_state["sms_confirm_phone"] = ""
     if "so_diag" not in st.session_state:
         st.session_state["so_diag"] = []
+    if "operator_selected_label" not in st.session_state:
+        st.session_state["operator_selected_label"] = ""
+    if "operator_selected_email" not in st.session_state:
+        st.session_state["operator_selected_email"] = ""
+    if "operator_selected_name" not in st.session_state:
+        st.session_state["operator_selected_name"] = ""
+    if "operator_selected_phone" not in st.session_state:
+        st.session_state["operator_selected_phone"] = ""
+    if "docusign_status" not in st.session_state:
+        st.session_state["docusign_status"] = ""
+    if "docusign_envelope_id" not in st.session_state:
+        st.session_state["docusign_envelope_id"] = ""
+    if "docusign_confirm_open" not in st.session_state:
+        st.session_state["docusign_confirm_open"] = False
+    if "docusign_confirm_name" not in st.session_state:
+        st.session_state["docusign_confirm_name"] = ""
+    if "docusign_confirm_email" not in st.session_state:
+        st.session_state["docusign_confirm_email"] = ""
+    if "docusign_confirm_operator" not in st.session_state:
+        st.session_state["docusign_confirm_operator"] = ""
+
+
+def find_operator_file():
+    candidates = [
+        PROJECT_ROOT / "operators.xlsx",
+        PROJECT_ROOT / "operator_details.xlsx",
+        PROJECT_ROOT / "operators.xlsm",
+        PROJECT_ROOT / "operators.xls",
+    ]
+    for path in candidates:
+        if path.exists():
+            return path
+    return None
+
+
+def _find_matching_column(columns, names):
+    lowered = {str(col).strip().lower(): col for col in columns}
+    for name in names:
+        if name in lowered:
+            return lowered[name]
+    for col in columns:
+        c = str(col).strip().lower()
+        for name in names:
+            if name in c:
+                return col
+    return None
+
+
+def load_operator_options():
+    path = find_operator_file()
+    if path is None:
+        return []
+
+    df = pd.read_excel(path)
+
+    if df.empty:
+        return []
+
+    name_col = _find_matching_column(df.columns, ["operator", "name", "display name", "operator name"])
+    email_col = _find_matching_column(df.columns, ["email", "operator email", "notification email", "docusign email"])
+    phone_col = _find_matching_column(df.columns, ["phone", "mobile", "telephone"])
+
+    if name_col is None or email_col is None:
+        raise RuntimeError("Operator Excel must contain name/operator and email columns.")
+
+    options = []
+    for _, row in df.iterrows():
+        name_value = clean_text(row.get(name_col, ""))
+        email_value = clean_text(row.get(email_col, ""))
+        phone_value = normalize_mobile_au(row.get(phone_col, "")) if phone_col else ""
+
+        if not name_value or not email_value:
+            continue
+
+        label = f"{name_value} ({email_value})"
+        options.append(
+            {
+                "label": label,
+                "name": name_value,
+                "email": email_value,
+                "phone": phone_value,
+            }
+        )
+
+    return options
+
+
+def ensure_docusign_ready():
+    if jwt is None:
+        raise RuntimeError("PyJWT package not installed")
+    if not DOCUSIGN_INTEGRATION_KEY:
+        raise RuntimeError("Missing DOCUSIGN_INTEGRATION_KEY in Streamlit secrets")
+    if not DOCUSIGN_USER_ID:
+        raise RuntimeError("Missing DOCUSIGN_USER_ID in Streamlit secrets")
+    if not DOCUSIGN_ACCOUNT_ID:
+        raise RuntimeError("Missing DOCUSIGN_ACCOUNT_ID in Streamlit secrets")
+    if not DOCUSIGN_PRIVATE_KEY:
+        raise RuntimeError("Missing DOCUSIGN_PRIVATE_KEY in Streamlit secrets")
+    if not DOCUSIGN_BASE_URI:
+        raise RuntimeError("Missing DOCUSIGN_BASE_URI in Streamlit secrets")
+
+
+def docusign_get_access_token():
+    ensure_docusign_ready()
+
+    now = int(time.time())
+    payload = {
+        "iss": DOCUSIGN_INTEGRATION_KEY,
+        "sub": DOCUSIGN_USER_ID,
+        "aud": DOCUSIGN_AUTH_SERVER,
+        "iat": now,
+        "exp": now + 3600,
+        "scope": "signature impersonation",
+    }
+
+    assertion = jwt.encode(payload, DOCUSIGN_PRIVATE_KEY, algorithm="RS256")
+
+    token_url = f"https://{DOCUSIGN_AUTH_SERVER}/oauth/token"
+    resp = requests.post(
+        token_url,
+        data={
+            "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+            "assertion": assertion,
+        },
+        timeout=30,
+    )
+
+    add_diag("DocuSign token URL", token_url)
+    add_diag("DocuSign token status", resp.status_code)
+
+    resp.raise_for_status()
+    data = resp.json()
+
+    if "access_token" not in data:
+        raise RuntimeError("DocuSign access token was not returned")
+
+    return data["access_token"]
+
+
+def build_docusign_document_bytes():
+    button_label = None
+    button_url = None
+    if st.session_state.get("apply_link_to_pdf") and st.session_state.get("payment_link"):
+        button_label = st.session_state.get("payment_label") or "Pay Now"
+        button_url = st.session_state.get("payment_link")
+
+    return stamp_main_pdf_bytes(
+        pdf_bytes=st.session_state["order_pdf_bytes"],
+        logo_path=LOGO_PATH,
+        button_label=button_label,
+        button_url=button_url,
+    )
+
+
+def docusign_send_for_signature(customer_name, customer_email, operator_email):
+    access_token = docusign_get_access_token()
+    pdf_bytes = build_docusign_document_bytes()
+    document_b64 = base64.b64encode(pdf_bytes).decode("utf-8")
+
+    try:
+        sign_x = str(int(float(DOCUSIGN_SIGN_X_POSITION)))
+        sign_y = str(int(float(DOCUSIGN_SIGN_Y_POSITION)))
+    except Exception:
+        sign_x = "360"
+        sign_y = "650"
+
+    page_number = "1"
+    if fitz is not None:
+        try:
+            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+            if DOCUSIGN_SIGN_PAGE == "last":
+                page_number = str(doc.page_count)
+            else:
+                page_number = str(max(int(DOCUSIGN_SIGN_PAGE), 1))
+            doc.close()
+        except Exception:
+            page_number = "1"
+
+    signer = {
+        "email": customer_email,
+        "name": customer_name,
+        "recipientId": "1",
+        "routingOrder": "1",
+        "tabs": {
+            "signHereTabs": [
+                {
+                    "documentId": "1",
+                    "pageNumber": page_number,
+                    "xPosition": sign_x,
+                    "yPosition": sign_y,
+                }
+            ]
+        },
+    }
+
+    carbon_copies = []
+    if operator_email:
+        carbon_copies.append(
+            {
+                "email": operator_email,
+                "name": operator_email,
+                "recipientId": "2",
+                "routingOrder": "2",
+            }
+        )
+
+    envelope_definition = {
+        "emailSubject": f"Please sign BoConcept order {st.session_state.get('sales_order', '')}".strip(),
+        "documents": [
+            {
+                "documentBase64": document_b64,
+                "name": f"{st.session_state.get('sales_order', 'Sales Order')}.pdf",
+                "fileExtension": "pdf",
+                "documentId": "1",
+            }
+        ],
+        "recipients": {
+            "signers": [signer],
+            "carbonCopies": carbon_copies,
+        },
+        "status": "sent",
+    }
+
+    url = f"{DOCUSIGN_BASE_URI.rstrip('/')}/restapi/v2.1/accounts/{DOCUSIGN_ACCOUNT_ID}/envelopes"
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+    }
+
+    add_diag("DocuSign envelope URL", url)
+
+    resp = requests.post(url, headers=headers, data=json.dumps(envelope_definition), timeout=60)
+
+    add_diag("DocuSign envelope status", resp.status_code)
+    add_diag("DocuSign envelope response", resp.text)
+
+    resp.raise_for_status()
+    data = resp.json()
+
+    envelope_id = data.get("envelopeId", "")
+    if not envelope_id:
+        raise RuntimeError("DocuSign envelopeId was not returned")
+
+    return envelope_id
 
 
 st.set_page_config(page_title=APP_TITLE, layout="wide")
@@ -702,6 +976,18 @@ if default_attachments:
 else:
     st.warning("No files found in assets/default-files")
 
+operator_options = []
+operator_error = ""
+try:
+    operator_options = load_operator_options()
+except Exception as e:
+    operator_error = str(e)
+
+if operator_error:
+    st.warning(operator_error)
+elif not operator_options:
+    st.warning("No operator file found or no operator records available.")
+
 if top_b.button("Reset Session", use_container_width=True):
     reset_session()
     st.rerun()
@@ -725,6 +1011,8 @@ if uploaded_pdf is not None:
         st.session_state["payment_link"] = ""
         st.session_state["stripe_session_id"] = ""
         st.session_state["apply_link_to_pdf"] = True
+        st.session_state["docusign_status"] = ""
+        st.session_state["docusign_envelope_id"] = ""
 
         st.session_state["customer_name"] = parsed["customer_name"]
         st.session_state["customer_email"] = parsed["customer_email"]
@@ -749,7 +1037,25 @@ if st.session_state.get("order_pdf_bytes"):
     if current_mode not in payment_options:
         current_mode = "balance"
 
+    selected_operator_index = 0
+    current_operator_label = st.session_state.get("operator_selected_label", "")
+    if operator_options and current_operator_label:
+        matches = [i for i, x in enumerate(operator_options) if x["label"] == current_operator_label]
+        if matches:
+            selected_operator_index = matches[0]
+
     with st.form("order_form"):
+        operator_choice = None
+        if operator_options:
+            operator_choice = st.selectbox(
+                "Operator",
+                options=operator_options,
+                index=selected_operator_index,
+                format_func=lambda x: x["label"],
+            )
+        else:
+            st.text_input("Operator", value="No operator records available", disabled=True)
+
         col_a, col_b, col_c = st.columns(3)
         customer_name = col_a.text_input("Customer", value=st.session_state.get("customer_name", ""))
         customer_email = col_b.text_input("Email", value=st.session_state.get("customer_email", ""))
@@ -794,9 +1100,16 @@ if st.session_state.get("order_pdf_bytes"):
         if st.session_state.get("payment_link"):
             st.text_input("Payment link", value=st.session_state.get("payment_link", ""), disabled=True)
 
-        b1, b2 = st.columns(2)
+        b1, b2, b3 = st.columns(3)
         save_clicked = b1.form_submit_button("Apply Changes")
         create_link_clicked = b2.form_submit_button("Create Stripe Link")
+        send_docusign_clicked = b3.form_submit_button("Send to DocuSign")
+
+    if operator_choice:
+        st.session_state["operator_selected_label"] = operator_choice["label"]
+        st.session_state["operator_selected_email"] = operator_choice["email"]
+        st.session_state["operator_selected_name"] = operator_choice["name"]
+        st.session_state["operator_selected_phone"] = operator_choice["phone"]
 
     if save_clicked:
         st.session_state["customer_name"] = customer_name
@@ -847,6 +1160,61 @@ if st.session_state.get("order_pdf_bytes"):
             st.rerun()
         except Exception as e:
             st.error(str(e))
+
+    if send_docusign_clicked:
+        st.session_state["customer_name"] = customer_name
+        st.session_state["customer_email"] = customer_email
+        st.session_state["phone"] = normalize_mobile_au(phone)
+        st.session_state["sales_order"] = sales_order
+        st.session_state["order_date"] = order_date
+        st.session_state["total_amount"] = parsed_total_amount
+        st.session_state["prepayment"] = parsed_prepayment
+        st.session_state["balance_due"] = parsed_balance_due
+        st.session_state["payment_mode"] = payment_choice
+        st.session_state["payment_amount"] = overridden_payment_amount
+        st.session_state["payment_label"] = effective_payment_label
+        st.session_state["apply_link_to_pdf"] = apply_link_to_pdf
+
+        if not st.session_state.get("customer_email", "").strip():
+            st.error("Customer email is required.")
+        elif not st.session_state.get("operator_selected_email", "").strip():
+            st.error("Select an operator first.")
+        else:
+            st.session_state["docusign_confirm_name"] = st.session_state.get("customer_name", "")
+            st.session_state["docusign_confirm_email"] = st.session_state.get("customer_email", "")
+            st.session_state["docusign_confirm_operator"] = st.session_state.get("operator_selected_label", "")
+            st.session_state["docusign_confirm_open"] = True
+
+    if st.session_state.get("docusign_confirm_open"):
+        with st.container(border=True):
+            st.warning(
+                f"About to send DocuSign to {st.session_state.get('docusign_confirm_name', '')} "
+                f"({st.session_state.get('docusign_confirm_email', '')}) "
+                f"with operator {st.session_state.get('docusign_confirm_operator', '')} copied."
+            )
+            c1, c2 = st.columns(2)
+            if c1.button("Confirm Send to DocuSign", use_container_width=True, key="confirm_docusign_send"):
+                try:
+                    reset_diag()
+                    envelope_id = docusign_send_for_signature(
+                        customer_name=st.session_state.get("customer_name", ""),
+                        customer_email=st.session_state.get("customer_email", ""),
+                        operator_email=st.session_state.get("operator_selected_email", ""),
+                    )
+                    st.session_state["docusign_envelope_id"] = envelope_id
+                    st.session_state["docusign_status"] = f"Sent ({envelope_id})"
+                    st.session_state["docusign_confirm_open"] = False
+                    st.success(f"DocuSign envelope sent: {envelope_id}")
+                except Exception as e:
+                    st.session_state["docusign_status"] = f"Failed ({e})"
+                    st.session_state["docusign_confirm_open"] = False
+                    st.error(str(e))
+            if c2.button("Cancel", use_container_width=True, key="cancel_docusign_send"):
+                st.session_state["docusign_confirm_open"] = False
+                st.rerun()
+
+    if st.session_state.get("docusign_status"):
+        st.text_input("DocuSign Status", value=st.session_state.get("docusign_status", ""), disabled=True)
 
     st.markdown("### Additional Files")
     extra_files = st.file_uploader(
