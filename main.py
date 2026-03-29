@@ -62,7 +62,9 @@ st.markdown(
 )
 
 if LOGO_PATH:
-    st.image(str(LOGO_PATH), width=220)
+    logo_col, _ = st.columns([1.2, 4.8])
+    with logo_col:
+        st.image(str(LOGO_PATH), width=220)
 
 st.title(APP_TITLE)
 st.write("Choose an app below.")
