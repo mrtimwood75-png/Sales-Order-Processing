@@ -1,7 +1,7 @@
 import streamlit as st
 from pathlib import Path
 
-APP_TITLE = "BoConcept Apps"
+APP_TITLE = "Salesorder & Quote Apps"
 BASE_DIR = Path(__file__).resolve().parent
 
 
