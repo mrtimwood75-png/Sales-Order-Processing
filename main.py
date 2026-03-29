@@ -29,6 +29,10 @@ st.set_page_config(page_title=APP_TITLE, layout="wide")
 st.markdown(
     """
     <style>
+        header[data-testid="stHeader"] {
+            display: none;
+        }
+
         .block-container {
             padding-top: 1.2rem;
             padding-bottom: 2rem;
