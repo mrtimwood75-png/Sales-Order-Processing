@@ -35,20 +35,6 @@ st.markdown(
             max-width: 1280px;
         }
 
-        .logo-wrap {
-            width: 100%;
-            margin-bottom: 1.5rem;
-        }
-
-        .logo-wrap img {
-            display: block !important;
-            width: 620px !important;
-            max-width: 100% !important;
-            height: auto !important;
-            object-fit: contain !important;
-            object-position: left center !important;
-        }
-
         .app-card {
             border: 1px solid #D9D9D9;
             border-radius: 14px;
@@ -76,9 +62,7 @@ st.markdown(
 )
 
 if LOGO_PATH:
-    st.markdown('<div class="logo-wrap">', unsafe_allow_html=True)
-    st.image(str(LOGO_PATH))
-    st.markdown("</div>", unsafe_allow_html=True)
+    st.image(str(LOGO_PATH), width=220)
 
 st.title(APP_TITLE)
 st.write("Choose an app below.")
