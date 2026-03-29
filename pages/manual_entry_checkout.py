@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 import streamlit as st
 
@@ -9,6 +10,8 @@ except Exception:
 
 
 APP_TITLE = "Manual Entry Checkout"
+BASE_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = BASE_DIR.parent
 
 STRIPE_SECRET_KEY = st.secrets.get("STRIPE_SECRET_KEY", os.getenv("STRIPE_SECRET_KEY", "")).strip()
 STRIPE_SUCCESS_URL = st.secrets.get(
@@ -27,6 +30,22 @@ STRIPE_TEST_FALLBACK_URL = st.secrets.get(
     "STRIPE_TEST_FALLBACK_URL",
     os.getenv("STRIPE_TEST_FALLBACK_URL", "https://buy.stripe.com/test_14A5kC7WQ3KQ4qQeUU"),
 ).strip()
+
+
+def resolve_logo_path():
+    candidates = [
+        PROJECT_ROOT / "assets" / "boconcept_logo.png",
+        PROJECT_ROOT / "assets" / "boconcept_logo.PNG",
+        PROJECT_ROOT / "assets" / "BoConcept_logo.png",
+        PROJECT_ROOT / "assets" / "BoConcept_logo.PNG",
+    ]
+    for path in candidates:
+        if path.exists():
+            return path
+    return None
+
+
+LOGO_PATH = resolve_logo_path()
 
 
 def ensure_stripe_ready():
@@ -50,11 +69,9 @@ def format_money(value):
 
 def payment_choice_to_values(choice: str, balance_due: float):
     bal = round(float(balance_due or 0), 2)
-    if bal <= 0:
-        raise RuntimeError("Balance due must be greater than 0")
 
     if choice == "deposit":
-        deposit_amount = round(bal * 0.50, 2)
+        deposit_amount = round(bal * 0.50, 2) if bal > 0 else 0.0
         return {
             "payment_mode": "deposit",
             "payment_amount": deposit_amount,
@@ -69,12 +86,12 @@ def payment_choice_to_values(choice: str, balance_due: float):
 
 
 def create_stripe_checkout_link(customer_name, customer_email, sales_order, amount, payment_label):
+    amount_value = float(amount or 0)
+    if amount_value <= 0:
+        raise RuntimeError("Payment amount must be greater than 0")
+
     if STRIPE_SECRET_KEY and stripe is not None:
         ensure_stripe_ready()
-
-        amount_value = float(amount or 0)
-        if amount_value <= 0:
-            raise RuntimeError("Payment amount must be greater than 0")
 
         unit_amount = int(round(amount_value * 100))
         order_ref = sales_order or "Order"
@@ -113,47 +130,44 @@ def create_stripe_checkout_link(customer_name, customer_email, sales_order, amou
     return {"url": STRIPE_TEST_FALLBACK_URL, "session_id": "test_link"}
 
 
-st.set_page_config(page_title=APP_TITLE, layout="wide")
+def init_state():
+    defaults = {
+        "manual_customer_name": "",
+        "manual_customer_email": "",
+        "manual_phone": "",
+        "manual_sales_order": "",
+        "manual_order_date": "",
+        "manual_total_amount": 0.0,
+        "manual_prepayment": 0.0,
+        "manual_balance_due": 0.0,
+        "manual_payment_mode": "balance",
+        "manual_payment_amount": 0.0,
+        "manual_payment_label": "Pay Balance Now",
+        "manual_payment_link": "",
+        "manual_stripe_session_id": "",
+    }
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
 
-top_left, top_right = st.columns([5, 1])
-with top_left:
-    st.title(APP_TITLE)
-with top_right:
-    st.write("")
+
+st.set_page_config(page_title=APP_TITLE, layout="wide")
+init_state()
+
+top_nav_left, top_nav_right = st.columns([1, 5])
+with top_nav_left:
     if st.button("Home", use_container_width=True):
         st.switch_page("main.py")
+with top_nav_right:
+    if LOGO_PATH:
+        st.image(str(LOGO_PATH), width=220)
+
+st.title(APP_TITLE)
 
 if STRIPE_SECRET_KEY:
     st.caption("Stripe mode: live/session creation enabled")
 else:
     st.warning("Stripe secret missing. Fallback test link will be used.")
-
-if "manual_customer_name" not in st.session_state:
-    st.session_state["manual_customer_name"] = ""
-if "manual_customer_email" not in st.session_state:
-    st.session_state["manual_customer_email"] = ""
-if "manual_phone" not in st.session_state:
-    st.session_state["manual_phone"] = ""
-if "manual_sales_order" not in st.session_state:
-    st.session_state["manual_sales_order"] = ""
-if "manual_order_date" not in st.session_state:
-    st.session_state["manual_order_date"] = ""
-if "manual_total_amount" not in st.session_state:
-    st.session_state["manual_total_amount"] = 0.0
-if "manual_prepayment" not in st.session_state:
-    st.session_state["manual_prepayment"] = 0.0
-if "manual_balance_due" not in st.session_state:
-    st.session_state["manual_balance_due"] = 0.0
-if "manual_payment_mode" not in st.session_state:
-    st.session_state["manual_payment_mode"] = "balance"
-if "manual_payment_amount" not in st.session_state:
-    st.session_state["manual_payment_amount"] = 0.0
-if "manual_payment_label" not in st.session_state:
-    st.session_state["manual_payment_label"] = "Pay Balance Now"
-if "manual_payment_link" not in st.session_state:
-    st.session_state["manual_payment_link"] = ""
-if "manual_stripe_session_id" not in st.session_state:
-    st.session_state["manual_stripe_session_id"] = ""
 
 with st.form("manual_entry_form"):
     col_a, col_b, col_c = st.columns(3)
@@ -183,7 +197,9 @@ with st.form("manual_entry_form"):
 
     payment_calc = payment_choice_to_values(payment_choice, parsed_balance_due)
 
-    current_payment_amount = st.session_state["manual_payment_amount"] or payment_calc["payment_amount"]
+    current_payment_amount = st.session_state["manual_payment_amount"]
+    if current_payment_amount <= 0:
+        current_payment_amount = payment_calc["payment_amount"]
     if st.session_state["manual_payment_mode"] != payment_choice:
         current_payment_amount = payment_calc["payment_amount"]
 

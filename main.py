@@ -26,10 +26,18 @@ st.markdown(
     """
     <style>
         .block-container {
-            padding-top: 2rem;
+            padding-top: 1.2rem;
             padding-bottom: 2rem;
             max-width: 1200px;
         }
+
+        .logo-wrap img {
+            max-width: 320px !important;
+            width: 320px !important;
+            height: auto !important;
+            display: block;
+        }
+
         .app-card {
             border: 1px solid #D9D9D9;
             border-radius: 14px;
@@ -38,12 +46,14 @@ st.markdown(
             box-shadow: 0 2px 10px rgba(0,0,0,0.04);
             min-height: 185px;
         }
+
         .app-title {
             font-size: 1.15rem;
             font-weight: 600;
             margin-bottom: 0.35rem;
             color: #111111;
         }
+
         .app-text {
             font-size: 0.95rem;
             color: #4A4A4A;
@@ -55,7 +65,9 @@ st.markdown(
 )
 
 if LOGO_PATH:
-    st.image(str(LOGO_PATH), width=260)
+    st.markdown('<div class="logo-wrap">', unsafe_allow_html=True)
+    st.image(str(LOGO_PATH), width=320)
+    st.markdown("</div>", unsafe_allow_html=True)
 
 st.title(APP_TITLE)
 st.write("Choose an app below.")
@@ -66,13 +78,13 @@ with col1:
     st.markdown(
         """
         <div class="app-card">
-            <div class="app-title">Sales Order Modifier</div>
+            <div class="app-title">Add Stripe Payment Link</div>
             <div class="app-text">Upload a sales order PDF, create a Stripe checkout link, and build a bundled PDF.</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
-    if st.button("Open Sales Order Modifier", use_container_width=True, key="open_sales_order_modifier"):
+    if st.button("Open Add Stripe Payment Link", use_container_width=True, key="open_sales_order_modifier"):
         st.switch_page("pages/sales_order_modifier.py")
 
 with col2:

@@ -15,7 +15,7 @@ except Exception:
     stripe = None
 
 
-APP_TITLE = "BoConcept Ops App"
+APP_TITLE = "Add Stripe Payment Link"
 BASE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = BASE_DIR.parent
 DEFAULT_FILES_DIR = PROJECT_ROOT / "assets" / "default-files"
@@ -177,7 +177,7 @@ def find_value(pattern, text, group=1):
 def extract_amount_after_label(label, text):
     pattern = (
         rf"{re.escape(label)}\s*"
-        r"([\d]{1,3}(?:\.[\d]{3})*(?:,\d{2})|[\d]+,\d{2}|[\d]+(?:\.\d{2})?)"
+        r"([\d]{{1,3}}(?:\.[\d]{{3}})*(?:,\d{{2}})|[\d]+,\d{{2}}|[\d]+(?:\.\d{{2}})?)"
     )
     return find_value(pattern, text)
 
@@ -285,11 +285,8 @@ def parse_sales_order_pdf_bytes(pdf_bytes: bytes):
 
 def payment_choice_to_values(choice: str, balance_due: float):
     bal = round(float(balance_due or 0), 2)
-    if bal <= 0:
-        raise RuntimeError("Balance due must be greater than 0")
-
     if choice == "deposit":
-        deposit_amount = round(bal * 0.50, 2)
+        deposit_amount = round(bal * 0.50, 2) if bal > 0 else 0.0
         return {
             "payment_mode": "deposit",
             "payment_amount": deposit_amount,
@@ -312,12 +309,12 @@ def ensure_stripe_ready():
 
 
 def create_stripe_checkout_link(customer_name, customer_email, sales_order, amount, payment_label):
+    amount_value = float(amount or 0)
+    if amount_value <= 0:
+        raise RuntimeError("Payment amount must be greater than 0")
+
     if STRIPE_SECRET_KEY and stripe is not None:
         ensure_stripe_ready()
-
-        amount_value = float(amount or 0)
-        if amount_value <= 0:
-            raise RuntimeError("Payment amount must be greater than 0")
 
         unit_amount = int(round(amount_value * 100))
         order_ref = sales_order or "Order"
@@ -591,24 +588,21 @@ def safe_filename(value: str, fallback: str = "customer"):
 
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 
-top_left, top_right = st.columns([5, 1])
-with top_left:
-    st.title(APP_TITLE)
-with top_right:
-    st.write("")
+top_nav_left, top_nav_right = st.columns([1, 5])
+with top_nav_left:
     if st.button("Home", use_container_width=True):
         st.switch_page("main.py")
+with top_nav_right:
+    if LOGO_PATH:
+        st.image(str(LOGO_PATH), width=220)
+
+st.title(APP_TITLE)
 
 top_a, top_b = st.columns([3, 1])
-if LOGO_PATH:
-    top_a.caption(f"Logo loaded: {LOGO_PATH.name}")
-else:
-    top_a.error("BoConcept logo not found in assets folder")
-
 if STRIPE_SECRET_KEY:
-    st.caption("Stripe mode: live/session creation enabled")
+    top_a.caption("Stripe mode: live/session creation enabled")
 else:
-    st.warning("Stripe secret missing. Fallback test link will be used.")
+    top_a.warning("Stripe secret missing. Fallback test link will be used.")
 
 default_attachments = get_default_attachments()
 if default_attachments:
@@ -616,7 +610,7 @@ if default_attachments:
 else:
     st.warning("No files found in assets/default-files")
 
-if top_b.button("Reset Session"):
+if top_b.button("Reset Session", use_container_width=True):
     reset_session()
     st.rerun()
 
