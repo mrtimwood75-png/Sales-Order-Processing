@@ -177,7 +177,7 @@ def find_value(pattern, text, group=1):
 def extract_amount_after_label(label, text):
     pattern = (
         rf"{re.escape(label)}\s*"
-        r"([\d]{{1,3}}(?:\.[\d]{{3}})*(?:,\d{{2}})|[\d]+,\d{{2}}|[\d]+(?:\.\d{{2}})?)"
+        r"([\d]{1,3}(?:\.[\d]{3})*(?:,\d{2})|[\d]+,\d{2}|[\d]+(?:\.\d{2})?)"
     )
     return find_value(pattern, text)
 
@@ -266,7 +266,7 @@ def parse_sales_order_pdf_bytes(pdf_bytes: bytes):
     balance_due = parse_money(balance_raw)
 
     if balance_due is None:
-        balance_due = total_amount - prepayment
+        balance_due = max(total_amount - prepayment, 0.0)
 
     return {
         "customer_name": customer_name,
@@ -283,19 +283,26 @@ def parse_sales_order_pdf_bytes(pdf_bytes: bytes):
     }
 
 
-def payment_choice_to_values(choice: str, balance_due: float):
-    bal = round(float(balance_due or 0), 2)
+def payment_choice_to_values(choice: str, total_amount: float, balance_due: float):
+    total = round(float(total_amount or 0), 2)
+    balance = round(float(balance_due or 0), 2)
+
     if choice == "deposit":
-        deposit_amount = round(bal * 0.50, 2) if bal > 0 else 0.0
+        if total <= 0:
+            return {
+                "payment_mode": "balance",
+                "payment_amount": balance,
+                "payment_label": "Pay Balance Now",
+            }
         return {
             "payment_mode": "deposit",
-            "payment_amount": deposit_amount,
+            "payment_amount": round(total * 0.50, 2),
             "payment_label": "Pay 50% Deposit Now",
         }
 
     return {
         "payment_mode": "balance",
-        "payment_amount": bal,
+        "payment_amount": balance,
         "payment_label": "Pay Balance Now",
     }
 
@@ -644,13 +651,19 @@ if uploaded_pdf is not None:
         st.session_state["prepayment"] = parsed["prepayment"]
         st.session_state["balance_due"] = parsed["balance_due"]
 
-        calc = payment_choice_to_values("balance", parsed["balance_due"])
+        calc = payment_choice_to_values("balance", parsed["total_amount"], parsed["balance_due"])
         st.session_state["payment_mode"] = calc["payment_mode"]
         st.session_state["payment_amount"] = calc["payment_amount"]
         st.session_state["payment_label"] = calc["payment_label"]
 
 if st.session_state.get("order_pdf_bytes"):
     st.markdown("### Current Order")
+
+    current_total_for_options = float(st.session_state.get("total_amount", 0.0) or 0.0)
+    payment_options = ["balance"] if current_total_for_options <= 0 else ["balance", "deposit"]
+    current_mode = st.session_state.get("payment_mode", "balance")
+    if current_mode not in payment_options:
+        current_mode = "balance"
 
     with st.form("order_form"):
         col_a, col_b, col_c = st.columns(3)
@@ -663,8 +676,8 @@ if st.session_state.get("order_pdf_bytes"):
         order_date = col_e.text_input("Order date", value=st.session_state.get("order_date", ""))
         payment_choice = col_f.radio(
             "Payment type",
-            options=["balance", "deposit"],
-            index=0 if st.session_state.get("payment_mode", "balance") == "balance" else 1,
+            options=payment_options,
+            index=payment_options.index(current_mode),
             format_func=lambda x: "Balance" if x == "balance" else "Deposit 50%",
             horizontal=True,
         )
@@ -678,7 +691,7 @@ if st.session_state.get("order_pdf_bytes"):
         parsed_prepayment = parse_numeric_input(prepayment, st.session_state.get("prepayment", 0.0))
         parsed_balance_due = parse_numeric_input(balance_due, st.session_state.get("balance_due", 0.0))
 
-        payment_calc = payment_choice_to_values(payment_choice, parsed_balance_due)
+        payment_calc = payment_choice_to_values(payment_choice, parsed_total_amount, parsed_balance_due)
 
         current_payment_amount = st.session_state.get("payment_amount", payment_calc["payment_amount"])
         if st.session_state.get("payment_mode") != payment_choice:
@@ -698,6 +711,9 @@ if st.session_state.get("order_pdf_bytes"):
             f"Balance due: {format_money(parsed_balance_due)}  |  "
             f"Payment amount: {format_money(overridden_payment_amount)}"
         )
+
+        if parsed_total_amount <= 0:
+            st.caption("Deposit 50% becomes available once Total is greater than 0.")
 
         if st.session_state.get("payment_link"):
             st.text_input("Payment link", value=st.session_state.get("payment_link", ""), disabled=True)
