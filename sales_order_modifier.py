@@ -1,7 +1,6 @@
 import os
 import re
 from pathlib import Path
-from urllib.parse import quote
 
 import streamlit as st
 
@@ -62,166 +61,6 @@ def resolve_logo_path():
 
 LOGO_PATH = resolve_logo_path()
 
-APP_LINKS = [
-    {
-        "name": "Order Bundle App",
-        "description": "Create bundled order PDFs with attachments and Stripe payment links.",
-        "url": "?page=order-bundle",
-    },
-    {
-        "name": "App 2",
-        "description": "Replace with your second app URL.",
-        "url": os.getenv("BOCONCEPT_APP_2_URL", "https://example.com/app-2"),
-    },
-    {
-        "name": "App 3",
-        "description": "Replace with your third app URL.",
-        "url": os.getenv("BOCONCEPT_APP_3_URL", "https://example.com/app-3"),
-    },
-]
-
-
-def inject_global_styles():
-    st.markdown(
-        """
-        <style>
-            .stApp {
-                background: linear-gradient(180deg, #f6f4f1 0%, #ffffff 100%);
-            }
-            .bc-hero {
-                background: #ffffff;
-                border: 1px solid #e7e2db;
-                border-radius: 18px;
-                padding: 32px 32px 26px 32px;
-                box-shadow: 0 10px 30px rgba(0,0,0,0.05);
-                margin-bottom: 20px;
-            }
-            .bc-title {
-                font-size: 2rem;
-                font-weight: 600;
-                letter-spacing: 0.02em;
-                color: #1f1f1f;
-                margin: 8px 0 6px 0;
-            }
-            .bc-subtitle {
-                color: #5d5d5d;
-                font-size: 1rem;
-                margin-bottom: 0;
-            }
-            .bc-grid {
-                display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-                gap: 18px;
-                margin-top: 18px;
-            }
-            .bc-card {
-                background: #ffffff;
-                border: 1px solid #e7e2db;
-                border-radius: 18px;
-                padding: 22px;
-                box-shadow: 0 10px 24px rgba(0,0,0,0.04);
-            }
-            .bc-card h3 {
-                margin: 0 0 8px 0;
-                color: #111111;
-                font-size: 1.15rem;
-            }
-            .bc-card p {
-                color: #555555;
-                min-height: 52px;
-                margin-bottom: 18px;
-            }
-            .bc-btn {
-                display: inline-block;
-                background: #111111;
-                color: #ffffff !important;
-                text-decoration: none;
-                padding: 12px 18px;
-                border-radius: 999px;
-                font-weight: 600;
-                letter-spacing: 0.01em;
-            }
-            .bc-btn:hover {
-                background: #2b2b2b;
-            }
-            .bc-topnav {
-                display: flex;
-                gap: 10px;
-                margin: 0 0 16px 0;
-                flex-wrap: wrap;
-            }
-            .bc-navbtn {
-                display: inline-block;
-                border: 1px solid #d8d2ca;
-                background: #ffffff;
-                color: #222222 !important;
-                text-decoration: none;
-                padding: 8px 14px;
-                border-radius: 999px;
-                font-size: 0.95rem;
-                font-weight: 500;
-            }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-def get_current_page():
-    return st.query_params.get("page", "home")
-
-
-def nav_link(label: str, page: str):
-    return f'<a class="bc-navbtn" href="?page={quote(page)}">{label}</a>'
-
-
-def render_top_nav(active_page: str):
-    st.markdown(
-        f"""
-        <div class="bc-topnav">
-            {nav_link('Home', 'home')}
-            {nav_link('Order Bundle App', 'order-bundle')}
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-def render_home_page():
-    hero_left, hero_right = st.columns([3, 2], vertical_alignment="center")
-
-    with hero_left:
-        st.markdown('<div class="bc-hero">', unsafe_allow_html=True)
-        if LOGO_PATH and LOGO_PATH.exists():
-            st.image(str(LOGO_PATH), width=240)
-        else:
-            st.markdown("### BoConcept")
-        st.markdown('<div class="bc-title">Operations Home</div>', unsafe_allow_html=True)
-        st.markdown(
-            '<p class="bc-subtitle">Central launch page for your BoConcept apps.</p>',
-            unsafe_allow_html=True,
-        )
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    with hero_right:
-        st.info("Set any external app URLs with environment variables such as BOCONCEPT_APP_2_URL and BOCONCEPT_APP_3_URL.")
-
-    cards_html = ['<div class="bc-grid">']
-    for app in APP_LINKS:
-        target = app["url"]
-        cards_html.append(
-            f'''
-            <div class="bc-card">
-                <h3>{app["name"]}</h3>
-                <p>{app["description"]}</p>
-                <a class="bc-btn" href="{target}">Open App</a>
-            </div>
-            '''
-        )
-    cards_html.append("</div>")
-    st.markdown("".join(cards_html), unsafe_allow_html=True)
-
-
 
 def get_default_attachments():
     attachments = []
@@ -247,7 +86,6 @@ def get_default_attachments():
         )
 
     return attachments
-
 
 
 def reset_session():
@@ -276,17 +114,14 @@ def reset_session():
             del st.session_state[k]
 
 
-
 def initialise_default_attachments():
     st.session_state["attachments"] = get_default_attachments()
-
 
 
 def clean_text(value):
     if value is None:
         return ""
     return re.sub(r"\s+", " ", str(value)).strip()
-
 
 
 def parse_money(text):
@@ -316,12 +151,10 @@ def parse_money(text):
         return None
 
 
-
 def format_money(value):
     if value is None:
         return "-"
     return f"{value:,.2f}"
-
 
 
 def parse_numeric_input(text, fallback=0.0):
@@ -331,11 +164,9 @@ def parse_numeric_input(text, fallback=0.0):
         return float(fallback)
 
 
-
 def find_value(pattern, text, group=1):
     match = re.search(pattern, text, re.IGNORECASE | re.MULTILINE)
     return match.group(group).strip() if match else ""
-
 
 
 def extract_amount_after_label(label, text):
@@ -344,7 +175,6 @@ def extract_amount_after_label(label, text):
         r"([\d]{1,3}(?:\.[\d]{3})*(?:,\d{2})|[\d]+,\d{2}|[\d]+(?:\.\d{2})?)"
     )
     return find_value(pattern, text)
-
 
 
 def extract_totals_block(text):
@@ -384,7 +214,6 @@ def extract_totals_block(text):
             balance_raw = f"{(total_num - prepay_num):.2f}"
 
     return total_raw, prepayment_raw, balance_raw
-
 
 
 def parse_sales_order_pdf_bytes(pdf_bytes: bytes):
@@ -449,7 +278,6 @@ def parse_sales_order_pdf_bytes(pdf_bytes: bytes):
     }
 
 
-
 def payment_choice_to_values(choice: str, balance_due: float):
     bal = round(float(balance_due or 0), 2)
     if bal <= 0:
@@ -470,14 +298,12 @@ def payment_choice_to_values(choice: str, balance_due: float):
     }
 
 
-
 def ensure_stripe_ready():
     if stripe is None:
         raise RuntimeError("Stripe package not installed")
     if not STRIPE_SECRET_KEY:
         raise RuntimeError("Missing STRIPE_SECRET_KEY in Streamlit secrets")
     stripe.api_key = STRIPE_SECRET_KEY
-
 
 
 def create_stripe_checkout_link(customer_name, customer_email, sales_order, amount, payment_label):
@@ -525,7 +351,6 @@ def create_stripe_checkout_link(customer_name, customer_email, sales_order, amou
     return {"url": STRIPE_TEST_FALLBACK_URL, "session_id": "test_link"}
 
 
-
 def get_page_text_left_margin(page):
     try:
         blocks = page.get_text("blocks")
@@ -549,7 +374,6 @@ def get_page_text_left_margin(page):
 
     left = min(candidates)
     return max(18, min(left, 80))
-
 
 
 def find_balance_anchor_on_last_page(page):
@@ -580,7 +404,6 @@ def find_balance_anchor_on_last_page(page):
                 best = (min_x, max_y)
 
     return best
-
 
 
 def draw_3d_button(page, rect, label, url):
@@ -646,7 +469,6 @@ def draw_3d_button(page, rect, label, url):
     )
 
 
-
 def stamp_main_pdf_bytes(pdf_bytes: bytes, logo_path, button_label=None, button_url=None):
     if fitz is None:
         raise RuntimeError("PyMuPDF not installed")
@@ -701,7 +523,6 @@ def stamp_main_pdf_bytes(pdf_bytes: bytes, logo_path, button_label=None, button_
     return output
 
 
-
 def append_image_bytes_as_pdf_pages(bundle_doc, image_bytes: bytes):
     img_doc = fitz.open(stream=image_bytes)
     pdf_bytes = img_doc.convert_to_pdf()
@@ -710,7 +531,6 @@ def append_image_bytes_as_pdf_pages(bundle_doc, image_bytes: bytes):
     img_pdf = fitz.open("pdf", pdf_bytes)
     bundle_doc.insert_pdf(img_pdf)
     img_pdf.close()
-
 
 
 def append_file_bytes_to_pdf(bundle_doc, file_name: str, file_bytes: bytes):
@@ -727,7 +547,6 @@ def append_file_bytes_to_pdf(bundle_doc, file_name: str, file_bytes: bytes):
         return
 
     raise RuntimeError(f"Unsupported attachment type: {file_name}")
-
 
 
 def build_single_bundle_pdf_bytes(main_pdf_bytes: bytes, attachments, logo_path, button_label=None, button_url=None):
@@ -759,124 +578,139 @@ def build_single_bundle_pdf_bytes(main_pdf_bytes: bytes, attachments, logo_path,
     return output
 
 
+st.set_page_config(page_title=APP_TITLE, layout="wide")
+st.title(APP_TITLE)
 
-def render_order_bundle_app():
-    st.title(APP_TITLE)
+top_a, top_b = st.columns([3, 1])
+if LOGO_PATH:
+    top_a.caption(f"Logo loaded: {LOGO_PATH.name}")
+else:
+    top_a.error("BoConcept logo not found in assets folder")
 
-    top_a, top_b = st.columns([3, 1])
-    if LOGO_PATH:
-        top_a.caption(f"Logo loaded: {LOGO_PATH.name}")
-    else:
-        top_a.error("BoConcept logo not found in assets folder")
+if STRIPE_SECRET_KEY:
+    st.caption("Stripe mode: live/session creation enabled")
+else:
+    st.warning("Stripe secret missing. Fallback test link will be used.")
 
-    if STRIPE_SECRET_KEY:
-        st.caption("Stripe mode: live/session creation enabled")
-    else:
-        st.warning("Stripe secret missing. Fallback test link will be used.")
+default_attachments = get_default_attachments()
+if default_attachments:
+    st.caption(f"Locked default bundle files: {len(default_attachments)}")
+else:
+    st.warning("No files found in assets/default-files")
 
-    default_attachments = get_default_attachments()
-    if default_attachments:
-        st.caption(f"Locked default bundle files: {len(default_attachments)}")
-    else:
-        st.warning("No files found in assets/default-files")
+if top_b.button("Reset Session"):
+    reset_session()
+    st.rerun()
 
-    if top_b.button("Reset Session"):
-        reset_session()
+st.caption("Session-only mode. Nothing is saved after reload.")
+
+uploaded_pdf = st.file_uploader("Upload sales order PDF", type=["pdf"], key="orders_pdf")
+
+if uploaded_pdf is not None:
+    pdf_bytes = uploaded_pdf.getvalue()
+
+    if (
+        st.session_state.get("order_pdf_name") != uploaded_pdf.name
+        or st.session_state.get("order_pdf_bytes") != pdf_bytes
+    ):
+        parsed = parse_sales_order_pdf_bytes(pdf_bytes)
+
+        st.session_state["order_pdf_name"] = uploaded_pdf.name
+        st.session_state["order_pdf_bytes"] = pdf_bytes
+        initialise_default_attachments()
+        st.session_state["payment_link"] = ""
+        st.session_state["stripe_session_id"] = ""
+        st.session_state["bundle_pdf_bytes"] = None
+        st.session_state["bundle_pdf_name"] = ""
+
+        st.session_state["customer_name"] = parsed["customer_name"]
+        st.session_state["customer_email"] = parsed["customer_email"]
+        st.session_state["phone"] = parsed["phone"]
+        st.session_state["sales_order"] = parsed["sales_order"]
+        st.session_state["order_date"] = parsed["order_date"]
+        st.session_state["total_amount"] = parsed["total_amount"]
+        st.session_state["prepayment"] = parsed["prepayment"]
+        st.session_state["balance_due"] = parsed["balance_due"]
+
+        calc = payment_choice_to_values("balance", parsed["balance_due"])
+        st.session_state["payment_mode"] = calc["payment_mode"]
+        st.session_state["payment_amount"] = calc["payment_amount"]
+        st.session_state["payment_label"] = calc["payment_label"]
+
+if st.session_state.get("order_pdf_bytes"):
+    st.markdown("### Current Order")
+
+    with st.form("order_form"):
+        col_a, col_b, col_c = st.columns(3)
+        customer_name = col_a.text_input("Customer", value=st.session_state.get("customer_name", ""))
+        customer_email = col_b.text_input("Email", value=st.session_state.get("customer_email", ""))
+        phone = col_c.text_input("Phone", value=st.session_state.get("phone", ""))
+
+        col_d, col_e, col_f = st.columns(3)
+        sales_order = col_d.text_input("Sales order", value=st.session_state.get("sales_order", ""))
+        order_date = col_e.text_input("Order date", value=st.session_state.get("order_date", ""))
+        payment_choice = col_f.radio(
+            "Payment type",
+            options=["balance", "deposit"],
+            index=0 if st.session_state.get("payment_mode", "balance") == "balance" else 1,
+            format_func=lambda x: "Balance" if x == "balance" else "Deposit 50%",
+            horizontal=True,
+        )
+
+        col_g, col_h, col_i, col_j, col_k = st.columns(5)
+        total_amount = col_g.text_input("Total", value=f"{float(st.session_state.get('total_amount', 0.0)):.2f}")
+        prepayment = col_h.text_input("Prepayment", value=f"{float(st.session_state.get('prepayment', 0.0)):.2f}")
+        balance_due = col_i.text_input("Balance due", value=f"{float(st.session_state.get('balance_due', 0.0)):.2f}")
+
+        parsed_total_amount = parse_numeric_input(total_amount, st.session_state.get("total_amount", 0.0))
+        parsed_prepayment = parse_numeric_input(prepayment, st.session_state.get("prepayment", 0.0))
+        parsed_balance_due = parse_numeric_input(balance_due, st.session_state.get("balance_due", 0.0))
+
+        payment_calc = payment_choice_to_values(payment_choice, parsed_balance_due)
+
+        current_payment_amount = st.session_state.get("payment_amount", payment_calc["payment_amount"])
+        if st.session_state.get("payment_mode") != payment_choice:
+            current_payment_amount = payment_calc["payment_amount"]
+
+        payment_amount_input = col_j.text_input(
+            "Payment amount",
+            value=f"{float(current_payment_amount):.2f}",
+        )
+        overridden_payment_amount = parse_numeric_input(payment_amount_input, payment_calc["payment_amount"])
+        col_k.metric("Default", format_money(payment_calc["payment_amount"]))
+
+        effective_payment_label = "Pay 50% Deposit Now" if payment_choice == "deposit" else "Pay Balance Now"
+
+        st.caption(
+            f"{effective_payment_label}  |  "
+            f"Balance due: {format_money(parsed_balance_due)}  |  "
+            f"Payment amount: {format_money(overridden_payment_amount)}"
+        )
+
+        if st.session_state.get("payment_link"):
+            st.text_input("Payment link", value=st.session_state.get("payment_link", ""), disabled=True)
+
+        b1, b2 = st.columns(2)
+        save_clicked = b1.form_submit_button("Apply Changes")
+        create_link_clicked = b2.form_submit_button("Create Stripe Link")
+
+    if save_clicked:
+        st.session_state["customer_name"] = customer_name
+        st.session_state["customer_email"] = customer_email
+        st.session_state["phone"] = phone
+        st.session_state["sales_order"] = sales_order
+        st.session_state["order_date"] = order_date
+        st.session_state["total_amount"] = parsed_total_amount
+        st.session_state["prepayment"] = parsed_prepayment
+        st.session_state["balance_due"] = parsed_balance_due
+        st.session_state["payment_mode"] = payment_choice
+        st.session_state["payment_amount"] = overridden_payment_amount
+        st.session_state["payment_label"] = effective_payment_label
+        st.success("Changes applied to current session")
         st.rerun()
 
-    st.caption("Session-only mode. Nothing is saved after reload.")
-
-    uploaded_pdf = st.file_uploader("Upload sales order PDF", type=["pdf"], key="orders_pdf")
-
-    if uploaded_pdf is not None:
-        pdf_bytes = uploaded_pdf.getvalue()
-
-        if (
-            st.session_state.get("order_pdf_name") != uploaded_pdf.name
-            or st.session_state.get("order_pdf_bytes") != pdf_bytes
-        ):
-            parsed = parse_sales_order_pdf_bytes(pdf_bytes)
-
-            st.session_state["order_pdf_name"] = uploaded_pdf.name
-            st.session_state["order_pdf_bytes"] = pdf_bytes
-            initialise_default_attachments()
-            st.session_state["payment_link"] = ""
-            st.session_state["stripe_session_id"] = ""
-            st.session_state["bundle_pdf_bytes"] = None
-            st.session_state["bundle_pdf_name"] = ""
-
-            st.session_state["customer_name"] = parsed["customer_name"]
-            st.session_state["customer_email"] = parsed["customer_email"]
-            st.session_state["phone"] = parsed["phone"]
-            st.session_state["sales_order"] = parsed["sales_order"]
-            st.session_state["order_date"] = parsed["order_date"]
-            st.session_state["total_amount"] = parsed["total_amount"]
-            st.session_state["prepayment"] = parsed["prepayment"]
-            st.session_state["balance_due"] = parsed["balance_due"]
-
-            calc = payment_choice_to_values("balance", parsed["balance_due"])
-            st.session_state["payment_mode"] = calc["payment_mode"]
-            st.session_state["payment_amount"] = calc["payment_amount"]
-            st.session_state["payment_label"] = calc["payment_label"]
-
-    if st.session_state.get("order_pdf_bytes"):
-        st.markdown("### Current Order")
-
-        with st.form("order_form"):
-            col_a, col_b, col_c = st.columns(3)
-            customer_name = col_a.text_input("Customer", value=st.session_state.get("customer_name", ""))
-            customer_email = col_b.text_input("Email", value=st.session_state.get("customer_email", ""))
-            phone = col_c.text_input("Phone", value=st.session_state.get("phone", ""))
-
-            col_d, col_e, col_f = st.columns(3)
-            sales_order = col_d.text_input("Sales order", value=st.session_state.get("sales_order", ""))
-            order_date = col_e.text_input("Order date", value=st.session_state.get("order_date", ""))
-            payment_choice = col_f.radio(
-                "Payment type",
-                options=["balance", "deposit"],
-                index=0 if st.session_state.get("payment_mode", "balance") == "balance" else 1,
-                format_func=lambda x: "Balance" if x == "balance" else "Deposit 50%",
-                horizontal=True,
-            )
-
-            col_g, col_h, col_i, col_j, col_k = st.columns(5)
-            total_amount = col_g.text_input("Total", value=f"{float(st.session_state.get('total_amount', 0.0)):.2f}")
-            prepayment = col_h.text_input("Prepayment", value=f"{float(st.session_state.get('prepayment', 0.0)):.2f}")
-            balance_due = col_i.text_input("Balance due", value=f"{float(st.session_state.get('balance_due', 0.0)):.2f}")
-
-            parsed_total_amount = parse_numeric_input(total_amount, st.session_state.get("total_amount", 0.0))
-            parsed_prepayment = parse_numeric_input(prepayment, st.session_state.get("prepayment", 0.0))
-            parsed_balance_due = parse_numeric_input(balance_due, st.session_state.get("balance_due", 0.0))
-
-            payment_calc = payment_choice_to_values(payment_choice, parsed_balance_due)
-
-            current_payment_amount = st.session_state.get("payment_amount", payment_calc["payment_amount"])
-            if st.session_state.get("payment_mode") != payment_choice:
-                current_payment_amount = payment_calc["payment_amount"]
-
-            payment_amount_input = col_j.text_input(
-                "Payment amount",
-                value=f"{float(current_payment_amount):.2f}",
-            )
-            overridden_payment_amount = parse_numeric_input(payment_amount_input, payment_calc["payment_amount"])
-            col_k.metric("Default", format_money(payment_calc["payment_amount"]))
-
-            effective_payment_label = "Pay 50% Deposit Now" if payment_choice == "deposit" else "Pay Balance Now"
-
-            st.caption(
-                f"{effective_payment_label}  |  "
-                f"Balance due: {format_money(parsed_balance_due)}  |  "
-                f"Payment amount: {format_money(overridden_payment_amount)}"
-            )
-
-            if st.session_state.get("payment_link"):
-                st.text_input("Payment link", value=st.session_state.get("payment_link", ""), disabled=True)
-
-            b1, b2 = st.columns(2)
-            save_clicked = b1.form_submit_button("Apply Changes")
-            create_link_clicked = b2.form_submit_button("Create Stripe Link")
-
-        if save_clicked:
+    if create_link_clicked:
+        try:
             st.session_state["customer_name"] = customer_name
             st.session_state["customer_email"] = customer_email
             st.session_state["phone"] = phone
@@ -888,141 +722,108 @@ def render_order_bundle_app():
             st.session_state["payment_mode"] = payment_choice
             st.session_state["payment_amount"] = overridden_payment_amount
             st.session_state["payment_label"] = effective_payment_label
-            st.success("Changes applied to current session")
-            st.rerun()
 
-        if create_link_clicked:
-            try:
-                st.session_state["customer_name"] = customer_name
-                st.session_state["customer_email"] = customer_email
-                st.session_state["phone"] = phone
-                st.session_state["sales_order"] = sales_order
-                st.session_state["order_date"] = order_date
-                st.session_state["total_amount"] = parsed_total_amount
-                st.session_state["prepayment"] = parsed_prepayment
-                st.session_state["balance_due"] = parsed_balance_due
-                st.session_state["payment_mode"] = payment_choice
-                st.session_state["payment_amount"] = overridden_payment_amount
-                st.session_state["payment_label"] = effective_payment_label
-
-                link_result = create_stripe_checkout_link(
-                    customer_name=customer_name,
-                    customer_email=customer_email,
-                    sales_order=sales_order,
-                    amount=overridden_payment_amount,
-                    payment_label=effective_payment_label,
-                )
-
-                st.session_state["payment_link"] = link_result["url"]
-                st.session_state["stripe_session_id"] = link_result["session_id"]
-
-                st.success("Stripe payment link created")
-                st.code(link_result["url"])
-                st.rerun()
-            except Exception as e:
-                st.error(str(e))
-
-        st.markdown("### Additional Files")
-        extra_files = st.file_uploader(
-            "Upload extra PDF or image files",
-            type=["pdf", "png", "jpg", "jpeg", "webp"],
-            accept_multiple_files=True,
-            key="attachments_uploader",
-        )
-
-        a1, a2 = st.columns([2, 1])
-
-        if a1.button("Add Files to Bundle"):
-            if extra_files:
-                if "attachments" not in st.session_state:
-                    initialise_default_attachments()
-
-                for up in extra_files:
-                    st.session_state["attachments"].append(
-                        {
-                            "name": up.name,
-                            "bytes": up.getvalue(),
-                            "locked": False,
-                            "source": "user",
-                        }
-                    )
-
-                st.success(f"Added {len(extra_files)} attachment file(s)")
-                st.rerun()
-            else:
-                st.warning("Choose files first")
-
-        attachments = st.session_state.get("attachments", [])
-
-        if a2.button("Build Bundle PDF"):
-            try:
-                safe_order = re.sub(
-                    r"[^A-Za-z0-9_-]+",
-                    "_",
-                    st.session_state.get("sales_order") or Path(st.session_state.get("order_pdf_name", "order")).stem,
-                )
-                bundle_name = f"{safe_order}_bundle.pdf"
-
-                button_label = None
-                button_url = None
-                if st.session_state.get("payment_link"):
-                    button_label = st.session_state.get("payment_label") or "Pay Now"
-                    button_url = st.session_state.get("payment_link")
-
-                bundle_bytes = build_single_bundle_pdf_bytes(
-                    main_pdf_bytes=st.session_state["order_pdf_bytes"],
-                    attachments=attachments,
-                    logo_path=LOGO_PATH,
-                    button_label=button_label,
-                    button_url=button_url,
-                )
-
-                st.session_state["bundle_pdf_bytes"] = bundle_bytes
-                st.session_state["bundle_pdf_name"] = bundle_name
-
-                st.success("Single bundled PDF created")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Bundle build failed: {e}")
-
-        if attachments:
-            st.caption("Bundle order:")
-            for i, att in enumerate(attachments, start=1):
-                r1, r2, r3 = st.columns([1, 7, 1])
-                r1.write(i)
-                suffix = " (default)" if att.get("locked") else ""
-                r2.write(f"{att['name']}{suffix}")
-                if att.get("locked"):
-                    r3.write("—")
-                else:
-                    if r3.button("Remove", key=f"remove_att_{i}"):
-                        attachments.pop(i - 1)
-                        st.session_state["attachments"] = attachments
-                        st.rerun()
-
-        if st.session_state.get("bundle_pdf_bytes"):
-            st.download_button(
-                "Download bundled PDF",
-                data=st.session_state["bundle_pdf_bytes"],
-                file_name=st.session_state.get("bundle_pdf_name", "bundle.pdf"),
-                mime="application/pdf",
+            link_result = create_stripe_checkout_link(
+                customer_name=customer_name,
+                customer_email=customer_email,
+                sales_order=sales_order,
+                amount=overridden_payment_amount,
+                payment_label=effective_payment_label,
             )
-    else:
-        st.info("Upload a sales order PDF to begin.")
 
+            st.session_state["payment_link"] = link_result["url"]
+            st.session_state["stripe_session_id"] = link_result["session_id"]
 
+            st.success("Stripe payment link created")
+            st.code(link_result["url"])
+            st.rerun()
+        except Exception as e:
+            st.error(str(e))
 
-def main():
-    st.set_page_config(page_title=APP_TITLE, layout="wide")
-    inject_global_styles()
-    current_page = get_current_page()
-    render_top_nav(current_page)
+    st.markdown("### Additional Files")
+    extra_files = st.file_uploader(
+        "Upload extra PDF or image files",
+        type=["pdf", "png", "jpg", "jpeg", "webp"],
+        accept_multiple_files=True,
+        key="attachments_uploader",
+    )
 
-    if current_page == "order-bundle":
-        render_order_bundle_app()
-    else:
-        render_home_page()
+    a1, a2 = st.columns([2, 1])
 
+    if a1.button("Add Files to Bundle"):
+        if extra_files:
+            if "attachments" not in st.session_state:
+                initialise_default_attachments()
 
-if __name__ == "__main__":
-    main()
+            for up in extra_files:
+                st.session_state["attachments"].append(
+                    {
+                        "name": up.name,
+                        "bytes": up.getvalue(),
+                        "locked": False,
+                        "source": "user",
+                    }
+                )
+
+            st.success(f"Added {len(extra_files)} attachment file(s)")
+            st.rerun()
+        else:
+            st.warning("Choose files first")
+
+    attachments = st.session_state.get("attachments", [])
+
+    if a2.button("Build Bundle PDF"):
+        try:
+            safe_order = re.sub(
+                r"[^A-Za-z0-9_-]+",
+                "_",
+                st.session_state.get("sales_order") or Path(st.session_state.get("order_pdf_name", "order")).stem,
+            )
+            bundle_name = f"{safe_order}_bundle.pdf"
+
+            button_label = None
+            button_url = None
+            if st.session_state.get("payment_link"):
+                button_label = st.session_state.get("payment_label") or "Pay Now"
+                button_url = st.session_state.get("payment_link")
+
+            bundle_bytes = build_single_bundle_pdf_bytes(
+                main_pdf_bytes=st.session_state["order_pdf_bytes"],
+                attachments=attachments,
+                logo_path=LOGO_PATH,
+                button_label=button_label,
+                button_url=button_url,
+            )
+
+            st.session_state["bundle_pdf_bytes"] = bundle_bytes
+            st.session_state["bundle_pdf_name"] = bundle_name
+
+            st.success("Single bundled PDF created")
+            st.rerun()
+        except Exception as e:
+            st.error(f"Bundle build failed: {e}")
+
+    if attachments:
+        st.caption("Bundle order:")
+        for i, att in enumerate(attachments, start=1):
+            r1, r2, r3 = st.columns([1, 7, 1])
+            r1.write(i)
+            suffix = " (default)" if att.get("locked") else ""
+            r2.write(f"{att['name']}{suffix}")
+            if att.get("locked"):
+                r3.write("—")
+            else:
+                if r3.button("Remove", key=f"remove_att_{i}"):
+                    attachments.pop(i - 1)
+                    st.session_state["attachments"] = attachments
+                    st.rerun()
+
+    if st.session_state.get("bundle_pdf_bytes"):
+        st.download_button(
+            "Download bundled PDF",
+            data=st.session_state["bundle_pdf_bytes"],
+            file_name=st.session_state.get("bundle_pdf_name", "bundle.pdf"),
+            mime="application/pdf",
+        )
+else:
+    st.info("Upload a sales order PDF to begin.")
