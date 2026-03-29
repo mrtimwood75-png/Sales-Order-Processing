@@ -30,6 +30,7 @@ st.markdown(
             padding-bottom: 2rem;
             max-width: 1280px;
         }
+
         .app-card {
             border: 1px solid #D9D9D9;
             border-radius: 14px;
@@ -38,16 +39,22 @@ st.markdown(
             box-shadow: 0 2px 10px rgba(0,0,0,0.04);
             min-height: 190px;
         }
+
         .app-title {
             font-size: 1.15rem;
             font-weight: 600;
             margin-bottom: 0.35rem;
             color: #111111;
         }
+
         .app-text {
             font-size: 0.95rem;
             color: #4A4A4A;
             margin-bottom: 1rem;
+        }
+
+        div[data-testid="stImage"] img {
+            object-fit: contain !important;
         }
     </style>
     """,
@@ -55,7 +62,7 @@ st.markdown(
 )
 
 if LOGO_PATH:
-    st.image(str(LOGO_PATH), width=340)
+    st.image(str(LOGO_PATH), width=420)
 
 st.title(APP_TITLE)
 st.write("Choose an app below.")
@@ -67,7 +74,7 @@ with col1:
         """
         <div class="app-card">
             <div class="app-title">Add Stripe Payment Link</div>
-            <div class="app-text">Upload a sales order PDF, create a Stripe checkout link, apply a payment button to the PDF, send the link by SMS, and build a bundled PDF.</div>
+            <div class="app-text">Upload a sales order PDF, create a Stripe checkout link, apply a payment button to the PDF, send the link by SMS, and bundle attachments into one PDF.</div>
         </div>
         """,
         unsafe_allow_html=True,

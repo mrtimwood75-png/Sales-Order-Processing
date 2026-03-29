@@ -204,8 +204,6 @@ def reset_session():
         "payment_label",
         "payment_link",
         "stripe_session_id",
-        "bundle_pdf_bytes",
-        "bundle_pdf_name",
         "apply_link_to_pdf",
         "sms_templates",
         "sms_template_name",
@@ -726,8 +724,6 @@ if uploaded_pdf is not None:
         initialise_default_attachments()
         st.session_state["payment_link"] = ""
         st.session_state["stripe_session_id"] = ""
-        st.session_state["bundle_pdf_bytes"] = None
-        st.session_state["bundle_pdf_name"] = ""
         st.session_state["apply_link_to_pdf"] = True
 
         st.session_state["customer_name"] = parsed["customer_name"]
@@ -884,7 +880,12 @@ if st.session_state.get("order_pdf_bytes"):
 
     attachments = st.session_state.get("attachments", [])
 
-    if a2.button("Build Bundle PDF"):
+    file_count = len(attachments) + 1
+    if a2.button(
+        f"Download PDF ({file_count} files)",
+        use_container_width=True,
+        disabled=not st.session_state.get("order_pdf_bytes"),
+    ):
         try:
             customer_file_part = safe_filename(st.session_state.get("customer_name", ""), "customer")
             bundle_name = f"{customer_file_part}.pdf"
@@ -903,11 +904,15 @@ if st.session_state.get("order_pdf_bytes"):
                 button_url=button_url,
             )
 
-            st.session_state["bundle_pdf_bytes"] = bundle_bytes
-            st.session_state["bundle_pdf_name"] = bundle_name
-
-            st.success("Single bundled PDF created")
-            st.rerun()
+            st.download_button(
+                "Download PDF",
+                data=bundle_bytes,
+                file_name=bundle_name,
+                mime="application/pdf",
+                use_container_width=True,
+                key=f"sales_order_download_{bundle_name}_{len(bundle_bytes)}",
+            )
+            st.success("PDF ready for download")
         except Exception as e:
             st.error(f"Bundle build failed: {e}")
 
@@ -925,14 +930,6 @@ if st.session_state.get("order_pdf_bytes"):
                     attachments.pop(i - 1)
                     st.session_state["attachments"] = attachments
                     st.rerun()
-
-    if st.session_state.get("bundle_pdf_bytes"):
-        st.download_button(
-            "Download bundled PDF",
-            data=st.session_state["bundle_pdf_bytes"],
-            file_name=st.session_state.get("bundle_pdf_name", "customer.pdf"),
-            mime="application/pdf",
-        )
 
     st.markdown("---")
     st.subheader("SMS Templates")
